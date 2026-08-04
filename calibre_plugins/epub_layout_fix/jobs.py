@@ -65,11 +65,15 @@ def run_polish(path, operations, log=None, cover_path=None, opf_path=None):
     return True, '; '.join(messages[-3:])
 
 
-def convert_to_epub(src_path, dest_path, recommendations=None, log=None):
+def convert_to_epub(src_path, dest_path, recommendations=None, log=None, target_version='3'):
     """Convert any calibre-readable format to EPUB, in process.
 
-    ``preserve_cover_aspect_ratio`` is forced on: without it calibre regenerates the cover with
-    preserveAspectRatio="none", which is one of the defects this plugin exists to repair.
+    Two options are forced regardless of what the conversion window says:
+
+    * ``preserve_cover_aspect_ratio`` - without it calibre regenerates the cover with
+      preserveAspectRatio="none", which is one of the defects this plugin exists to repair.
+    * ``epub_version`` - so the output starts at the requested version instead of being
+      produced as EPUB 2 and upgraded afterwards.
     """
     try:
         from calibre.customize.conversion import OptionRecommendation
@@ -82,6 +86,8 @@ def convert_to_epub(src_path, dest_path, recommendations=None, log=None):
         plumber = Plumber(src_path, dest_path, log or Log())
         recs = list(recommendations or [])
         recs.append(('preserve_cover_aspect_ratio', True, OptionRecommendation.HIGH))
+        if target_version in ('2', '3'):
+            recs.append(('epub_version', target_version, OptionRecommendation.HIGH))
         plumber.merge_ui_recommendations(recs)
         plumber.run()
     except Exception as e:                                     # noqa: BLE001
@@ -98,7 +104,7 @@ def process_book(path, settings, polish_ops=None, target_version='3',
     steps = []
     try:
         if convert_from:
-            ok, msg = convert_to_epub(convert_from, path, recommendations, log)
+            ok, msg = convert_to_epub(convert_from, path, recommendations, log, target_version)
             steps.append(('convert', ok, msg))
             if not ok:
                 return _as_dict(path, steps, None, 'conversion failed: %s' % msg)
