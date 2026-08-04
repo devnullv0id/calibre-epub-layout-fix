@@ -28,6 +28,37 @@ INCLUDE_SUFFIXES = ('.py', '.txt', '.png', '.svg', '.json')
 EXCLUDE_DIRS = {'__pycache__'}
 
 
+def plugin_version():
+    """PLUGIN_VERSION from action_base.py, as "x.y.z".
+
+    Parsed rather than imported: action_base imports calibre, which is not available to the
+    plain interpreter this script is meant to run under.
+    """
+    import ast
+
+    path = os.path.join(SRC, 'action_base.py')
+    with open(path, encoding='utf-8') as f:
+        tree = ast.parse(f.read(), path)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if getattr(node.targets[0], 'id', None) != 'PLUGIN_VERSION':
+            continue
+        return '.'.join(str(e.value) for e in node.value.elts)
+    raise SystemExit('PLUGIN_VERSION not found in %s' % path)
+
+
+def check_version(expected):
+    """Guard for the release job: a tag must not ship a zip claiming a different version."""
+    expected = expected.lstrip('v')
+    actual = plugin_version()
+    if actual != expected:
+        print('version mismatch: tag says %s, PLUGIN_VERSION is %s' % (expected, actual))
+        return 1
+    print('version %s matches' % actual)
+    return 0
+
+
 def collect():
     for entry in sorted(os.listdir(SRC)):
         full = os.path.join(SRC, entry)
@@ -161,7 +192,12 @@ def main():
     ap.add_argument('-i', '--install', action='store_true', help='install after building')
     ap.add_argument('-r', '--restart', action='store_true',
                     help='close calibre, build, install, then start calibre again')
+    ap.add_argument('--check-version', metavar='TAG',
+                    help='fail unless PLUGIN_VERSION matches TAG, then exit')
     args = ap.parse_args()
+
+    if args.check_version:
+        return check_version(args.check_version)
 
     if args.restart and not stop_calibre():
         print('could not close calibre; aborting rather than installing into a running instance')

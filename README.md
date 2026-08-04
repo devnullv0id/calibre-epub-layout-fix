@@ -105,6 +105,16 @@ calibre-customize -a dist/EPUB-Layout-Fix.zip
 
 Restart calibre, then place the buttons via **Preferences → Toolbars & menus**.
 
+While developing, one command does the whole loop — calibre is closed first because it writes its
+stale in-memory plugin list back on exit, which silently undoes an install made while it was open:
+
+```
+python build.py --restart
+```
+
+Every push also builds the zip in CI; the artifact is attached to each run, and to the release for
+a `v*` tag.
+
 ## Usage
 
 Three actions are contributed, each placeable independently:
@@ -118,6 +128,23 @@ Three actions are contributed, each placeable independently:
 The conversion window is calibre's real one — Metadata, Look & feel, Page setup and the rest are
 unchanged — with two extra categories in the left-hand list.
 
+### Fixing books automatically as they arrive
+
+**Preferences → Plugins → Customize → Automatic** turns on a listener that repairs books as they
+are added to the library. It is **off by default**, and worth understanding before turning on:
+
+- It hooks calibre's database event stream rather than the *Add books* action, so every route in
+  counts — Add books, drag and drop, the content server, a connected device, a watched folder.
+- A book that arrives in another format is converted to EPUB and then repaired. **The format it
+  arrived in is never removed.**
+- Events are debounced, so adding fifty books produces one run and one summary at the end rather
+  than fifty dialogs.
+- A book is never processed twice: an existing `ORIGINAL_EPUB` backup means it has been done
+  already, and the plugin's own write-back is suppressed rather than treated as a new import.
+- *Embed referenced fonts* and *Download external resources* are forced off for automatic runs
+  whatever the Polish panel says. The first scans this computer for fonts and copies them into the
+  book, the second fetches remote URLs; neither belongs in something that fires unattended.
+
 ## Settings
 
 | Option | Default | Effect |
@@ -130,9 +157,27 @@ unchanged — with two extra categories in the left-hand list.
 | Letterbox colour | `#000000` | Any hex colour |
 | Target EPUB version | EPUB 3 | EPUB 3 upgrades book internals first; EPUB 2 leaves the version alone |
 | Polish | calibre's own settings | calibre's polish operations, run before the layout fixes |
+| Fix books automatically | **off** | Repair books as they are added to the library |
+| Convert other formats | on | Automatic runs convert non-EPUB books, keeping the original format |
+| Wait for the import to finish | 3 s | How long to collect an import before starting one batch |
+| Ask before processing more than | 100 | Confirm once before queueing a very large import |
 
 The Polish panel is built from calibre's own operation list at runtime, so it always matches the
 Polish book dialog rather than drifting from a hardcoded copy.
+
+### Metadata and the cover
+
+When the plugin converts, it hands calibre the book's library metadata the same way calibre's own
+*Convert* action does, so the author's display name, the author order, the sort names and the
+`calibre:<uuid>` identifier all survive into the EPUB. Without that step the output keeps whatever
+the source file had embedded, which is how books end up shelved under "Rowling, J.K." with a
+sort name of "Unknown".
+
+The library cover is deliberately **not** passed to the conversion. Supplying one makes calibre
+replace the publisher's cover page with a regenerated title page at a lower resolution — and it
+then leaves the navigation document pointing at the page it just deleted, so "Cover" becomes a dead
+entry in the table of contents. Keeping the original page avoids both. Books that already carry
+that defect, from a conversion done outside the plugin, have those links repaired on the next run.
 
 ## How detection works
 
@@ -182,11 +227,17 @@ files are left anywhere.
 ```
 python build.py                                   # -> dist/EPUB-Layout-Fix.zip
 python build.py --install                         # also runs calibre-customize -a
+python build.py --restart                         # close calibre, build, install, start it again
 
 python tests/test_fixer.py [reference-library]    # engine: fixtures, parity, idempotency
 calibre-debug tests/smoke_gui.py                  # Qt widgets, offscreen
 calibre-debug tests/test_pipeline.py [book ...]   # convert -> polish -> upgrade -> fix
+calibre-debug tests/test_library.py               # throwaway library, incl. the import listener
+calibre-debug tests/test_progress.py              # job stages
 ```
+
+The suites that drive calibre load the *installed* plugin, not the working tree, so run
+`python build.py --install` before them or you will be testing the last build.
 
 The engine imports nothing from calibre or Qt, so `test_fixer.py` runs under a plain interpreter.
 Its parity test asserts identical results to the PowerShell implementation this was ported from,
