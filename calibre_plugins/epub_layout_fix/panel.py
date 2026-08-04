@@ -14,10 +14,10 @@ from __future__ import annotations
 
 try:
     from qt.core import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
-                         QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, Qt)
+                         QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, Qt)
 except ImportError:                                            # older calibre
     from PyQt5.Qt import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
-                          QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, Qt)
+                          QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, Qt)
 
 from calibre.gui2.convert import Widget
 
@@ -318,6 +318,79 @@ class PolishWidget(_PluginWidget):
     def save(self):
         prefs['polish_enabled'] = self.enabled.isChecked()
         prefs['polish_ops'] = {k: cb.isChecked() for k, cb in self.boxes.items()}
+
+
+class AutomationWidget(_PluginWidget):
+    """Run the repairs by themselves whenever books arrive in the library.
+
+    Only offered in Preferences -> Plugins -> Customize: it says nothing about a conversion the
+    user started by hand, so it has no place in the conversion window.
+    """
+
+    TITLE = _('Automatic')
+    ICON = 'sync.png'
+    HELP = _('Convert and fix books as they are added to the library')
+
+    KEYS = ('auto_on_import', 'auto_convert_formats', 'auto_debounce_secs', 'auto_max_books')
+
+    def build(self):
+        layout = QVBoxLayout(self)
+
+        self.enabled = QCheckBox(_('Fix books automatically when they are added to the library'))
+        self.enabled.setToolTip(_(
+            'Applies to every way a book can arrive: Add books, drag and drop, the content '
+            'server, a connected device and a watched folder. Off by default.'))
+        layout.addWidget(self.enabled)
+
+        self.box = QGroupBox(_('What to do with an imported book'))
+        form = QFormLayout(self.box)
+
+        self.convert_formats = QCheckBox(_('Convert other formats to EPUB, keeping the original'))
+        self.convert_formats.setToolTip(_(
+            'A book added as MOBI, AZW3, PDF, DOCX and so on is converted to EPUB and repaired. '
+            'The format it arrived in is never removed. Books that already have an EPUB are '
+            'repaired without being converted.'))
+        form.addRow(self.convert_formats)
+
+        self.debounce = QSpinBox()
+        self.debounce.setRange(1, 60)
+        self.debounce.setSuffix(_(' seconds'))
+        self.debounce.setToolTip(_(
+            'How long to wait for the import to settle before starting. Adding fifty books '
+            'produces fifty separate events; waiting collects them into one run with one '
+            'summary at the end instead of fifty.'))
+        form.addRow(_('Wait for the import to finish for:'), self.debounce)
+
+        self.max_books = QSpinBox()
+        self.max_books.setRange(1, 100000)
+        self.max_books.setToolTip(_(
+            'Importing a whole library at once would queue a job per book. Above this many, '
+            'confirmation is asked for first.'))
+        form.addRow(_('Ask before processing more than:'), self.max_books)
+        layout.addWidget(self.box)
+
+        note = QLabel(_(
+            'Books that have already been processed once are left alone, so a book is never '
+            'repaired twice. "Embed referenced fonts" and "Download external resources" are '
+            'always skipped on automatic runs: neither should happen unattended.'))
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        self.enabled.toggled.connect(self.box.setEnabled)
+        layout.addStretch(1)
+
+    def load(self):
+        self.enabled.setChecked(bool(prefs.get('auto_on_import', False)))
+        self.convert_formats.setChecked(bool(prefs.get('auto_convert_formats', True)))
+        self.debounce.setValue(int(prefs.get('auto_debounce_secs', 3) or 3))
+        self.max_books.setValue(int(prefs.get('auto_max_books', 100) or 100))
+        self.box.setEnabled(self.enabled.isChecked())
+
+    def save(self):
+        prefs['auto_on_import'] = self.enabled.isChecked()
+        prefs['auto_convert_formats'] = self.convert_formats.isChecked()
+        prefs['auto_debounce_secs'] = int(self.debounce.value())
+        prefs['auto_max_books'] = int(self.max_books.value())
 
 
 def calibre_polish_defaults():

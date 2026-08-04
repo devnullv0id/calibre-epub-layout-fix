@@ -638,7 +638,7 @@ def classify_page(zf, entry, names, min_width_percent):
 
     return PageInfo(page=entry, action='rewrite', category='full-page-image', reason=reason,
                     src=src, img_entry=img_entry, dims=dims, overflow=overflow,
-                    body_id=body_id, anchor_ids=anchor_ids,
+                    body_id=body_id, anchor_ids=anchor_ids, alt=img.get('alt'),
                     title=posixpath.splitext(posixpath.basename(entry))[0])
 
 
@@ -657,29 +657,38 @@ SVG_PAGE_TEMPLATE = """<?xml version='1.0' encoding='utf-8'?>
     <title>%(title)s</title>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
     <style type="text/css">
-      html { margin: 0; padding: 0; height: 100%%; }
-      body { margin: 0; padding: 0; height: 100%%; text-align: center; }
+      @page { margin: 0; padding: 0; }
+      html { margin: 0; padding: 0; height: 100%%;%(bg)s }
+      body { margin: 0; padding: 0; height: 100%%; text-align: center;%(bg)s }
       div.fullpage { margin: 0; padding: 0; height: 100%%;
                      text-align: center; page-break-inside: avoid; }
-      svg { display: block; margin: 0 auto; padding: 0; height: 100%%; }
+      svg { display: block; margin: 0 auto; padding: 0; height: 100%%;%(bg)s }
     </style>
   </head>
   <body%(body_id)s>
 <div class="fullpage">%(anchors)s<svg xmlns="http://www.w3.org/2000/svg" \
 xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="100%%" height="100%%" \
-viewBox="0 0 %(w)d %(h)d" preserveAspectRatio="xMidYMid meet">\
+viewBox="0 0 %(w)d %(h)d" preserveAspectRatio="xMidYMid meet"%(a11y)s>%(svg_title)s\
 <image width="%(w)d" height="%(h)d" xlink:href="%(src)s"/></svg></div>
 </body>
 </html>
 """
 
+#: id of the <title> the accessible name points at
+SVG_TITLE_ID = 'eplf-img-title'
 
-def build_svg_page(title, src, width, height, body_id=None, anchor_ids=(), preserve_anchors=True):
+
+def build_svg_page(title, src, width, height, body_id=None, anchor_ids=(), preserve_anchors=True,
+                   alt=None, background=None):
     """A self-contained full-page image document.
 
     No ``width:100%`` anywhere - these are block boxes, so auto width already fills the column;
     forcing 100% adds the reader's injected side margins on top and pushes the image right.
     No ``vh`` units either: Adobe RMSDK (Kobo, Tolino, PocketBook) ignores them silently.
+
+    ``alt`` carries the replaced ``<img alt="...">`` across as the SVG's accessible name; without
+    it every rewritten page would lose its only accessible description.
+    ``background`` paints the letterbox bands, used for the cover.
     """
     anchors = ''
     body_attr = ''
@@ -687,9 +696,16 @@ def build_svg_page(title, src, width, height, body_id=None, anchor_ids=(), prese
         if body_id:
             body_attr = ' id="%s"' % _xml_escape(body_id)
         anchors = ''.join('<span id="%s"></span>' % _xml_escape(a) for a in anchor_ids if a)
+
+    alt = (alt or '').strip()
+    a11y = ' role="img" aria-labelledby="%s"' % SVG_TITLE_ID if alt else ' role="img"'
+    svg_title = ('<title id="%s">%s</title>' % (SVG_TITLE_ID, _xml_escape(alt))) if alt else ''
+
+    bg = (' background-color: %s;' % background) if background else ''
     return SVG_PAGE_TEMPLATE % {
         'title': _xml_escape(title), 'src': _xml_escape(src),
         'w': width, 'h': height, 'body_id': body_attr, 'anchors': anchors,
+        'a11y': a11y, 'svg_title': svg_title, 'bg': bg,
     }
 
 
@@ -709,17 +725,56 @@ def repair_stretched_svg(text):
     return out, out != text
 
 
-def set_cover_background(text, color):
-    """Paint the letterbox bands. ``html/body`` covers the page canvas, ``svg`` the viewport box
-    the bands actually live in."""
+#: closes the block opened by COVER_MARKER, so a re-run replaces exactly what it wrote before
+COVER_END_MARKER = '/' + COVER_MARKER
+
+#: The block written by a previous run, up to but not including ``</style>``. The end marker is
+#: optional because books fixed by 0.1.0 carry only the opening one; matching to the end of the
+#: style element covers those, and the whole region is replaced so a re-run cannot leave two
+#: conflicting rule sets behind.
+_COVER_BLOCK_RE = re.compile(
+    r'\n?[ \t]*/\*\s*' + re.escape(COVER_MARKER) + r'\s*\*/'
+    r'.*?(?:/\*\s*' + re.escape(COVER_END_MARKER) + r'\s*\*/)?'
+    r'[ \t]*\n?[ \t]*(?=</style>)', re.S | re.I)
+
+
+def cover_rules(color=None):
+    """The rules a patched-in-place cover page needs.
+
+    Two problems have to be solved, and only the second one is cosmetic:
+
+    * the page's own stylesheet reaches the ``<svg>`` through a class selector - calibre writes
+      ``.calibreN { height: auto; width: auto }`` - which outranks the ``height="100%"``
+      presentation attribute and leaves the cover sized by the UA default. A class selector beats
+      a bare type selector, so these overrides have to be ``!important``.
+    * ``@page { margin: 5pt }`` and ``body { margin: 0 5pt }`` survive from the book's stylesheet
+      and put a gutter around what should be a full-bleed page.
+
+    ``color`` additionally paints the letterbox bands.
+    """
+    bg = (' background-color: %s !important;' % color) if color else ''
+    return ('\n            /* %s */\n'
+            '            @page { margin: 0; padding: 0; }\n'
+            '            html, body { margin: 0 !important; padding: 0 !important;\n'
+            '                         height: 100%% !important;%s }\n'
+            '            svg { display: block; margin: 0 auto !important; padding: 0;\n'
+            '                  width: auto !important; height: 100%% !important;%s }\n'
+            '            /* %s */\n        '
+            % (COVER_MARKER, bg, bg, COVER_END_MARKER))
+
+
+def set_cover_background(text, color=None):
+    """Make the cover page full-bleed, optionally with letterbox bands.
+
+    Idempotent: a previous run's block is replaced whole rather than patched, so re-running with a
+    different colour cannot leave two conflicting rule sets behind.
+    """
+    rules = cover_rules(color)
+
     if COVER_MARKER in text:
-        updated = re.sub(r'background-color:\s*#[0-9A-Fa-f]{6}',
-                         'background-color: %s' % color, text)
+        updated = _COVER_BLOCK_RE.sub(lambda _m: rules, text, count=1)
         return updated, updated != text
 
-    rules = ('\n            /* %s */\n'
-             '            html, body { background-color: %s; }\n'
-             '            svg { background-color: %s; }\n        ' % (COVER_MARKER, color, color))
     m = re.search(r'</style>', text, re.I)
     if m:
         return text[:m.start()] + rules + text[m.start():], True
@@ -907,7 +962,7 @@ def _plan(zf, names, settings, result):
             replacements[entry] = build_svg_page(
                 info['title'], info['src'], w, h,
                 info.get('body_id'), info.get('anchor_ids') or (),
-                settings['preserve_anchors'])
+                settings['preserve_anchors'], alt=info.get('alt'))
             result.image_pages += 1
             kept = len(info.get('anchor_ids') or ()) + (1 if info.get('body_id') else 0)
             result.details.append(
@@ -917,39 +972,185 @@ def _plan(zf, names, settings, result):
                    (' (kept %d anchor id(s))' % kept) if kept else ''))
 
             if opf_text:
-                opf_dir = posixpath.dirname(opf_name)
-                href = (entry[len(opf_dir) + 1:]
-                        if opf_dir and entry.startswith(opf_dir + '/') else entry)
-                opf_text, changed = add_opf_svg_property(opf_text, href)
+                opf_text, changed = _mark_svg_page(opf_text, opf_name, entry)
                 opf_dirty = opf_dirty or changed
 
-        if opf_dirty:
-            replacements[opf_name] = opf_text
+    # ---- cover ----
+    if cover_name and _fix_cover(zf, cover_name, names, settings, result, replacements):
+        if opf_text:
+            opf_text, changed = _mark_svg_page(opf_text, opf_name, cover_name)
+            opf_dirty = opf_dirty or changed
 
-    # ---- cover: aspect ratio first, then the letterbox colour ----
-    if cover_name:
-        cover_text = _text(zf, cover_name)
-        if cover_text:
-            dirty = False
-            repaired, changed = repair_stretched_svg(cover_text)
-            if changed:
-                cover_text, dirty = repaired, True
-                result.svg_repaired += 1
-                result.details.append('svg  %s (cover) preserveAspectRatio none -> xMidYMid meet'
-                                      % cover_name.split('/')[-1])
-                result.ledger.append({'page': cover_name, 'action': 'svg-repair',
-                                      'category': 'cover-stretched',
-                                      'reason': 'preserveAspectRatio=none on cover',
-                                      'width': None, 'height': None})
-            if settings['dark_cover']:
-                coloured, changed = set_cover_background(cover_text, settings['cover_color'])
-                if changed:
-                    cover_text, dirty = coloured, True
-                    result.cover_fixed = True
-            if dirty:
-                replacements[cover_name] = cover_text
+    # ---- navigation: drop links calibre left pointing at pages it deleted ----
+    _repair_navigation(zf, names, opf_name, result, replacements)
+
+    if opf_dirty:
+        replacements[opf_name] = opf_text
 
     return replacements
+
+
+def nav_documents(zf, names, opf_name):
+    """The EPUB 3 navigation documents, from the manifest ``properties="nav"`` flag."""
+    found = []
+    opf = _text(zf, opf_name) if opf_name else None
+    if opf:
+        for m in re.finditer(r'<item\b[^>]*/?>', opf):
+            item = m.group(0)
+            props = re.search(r'properties\s*=\s*"([^"]*)"', item)
+            if not props or 'nav' not in props.group(1).split():
+                continue
+            href = re.search(r'href\s*=\s*"([^"]+)"', item)
+            if href:
+                e = resolve_path(opf_name, href.group(1))
+                if e and e in names and e not in found:
+                    found.append(e)
+    if not found:
+        for n in names:
+            if n.lower().endswith('nav.xhtml'):
+                found.append(n)
+    return found
+
+
+def repair_nav_links(text, entry, names):
+    """Neutralise navigation links whose target is not in the archive.
+
+    calibre's conversion replaces the publisher's cover page with a generated title page but
+    leaves the navigation document pointing at the file it deleted, so "Cover" is a dead entry in
+    the table of contents. A dangling link becomes a ``<span>``, which is what EPUB 3 expects for
+    an unlinked heading; in the landmarks list, where a bare ``<span>`` is not allowed, the whole
+    entry goes.
+    """
+    dropped = []
+
+    def target_missing(href):
+        tgt = resolve_path(entry, href.split('#')[0])
+        return bool(tgt) and tgt not in names
+
+    out, pos, changed = [], 0, False
+    for m in re.finditer(r'<a\b[^>]*?href\s*=\s*"([^"]+)"[^>]*>', text, re.I):
+        href = m.group(1)
+        if href.startswith('#') or re.match(r'^[a-z][a-z0-9+.-]*:', href, re.I):
+            continue
+        if not target_missing(href):
+            continue
+
+        close = text.find('</a>', m.end())
+        if close < 0:
+            continue
+        # landmarks entries are meaningless without a destination - drop the list item whole
+        li_open = text.rfind('<li', 0, m.start())
+        li_close = text.find('</li>', close)
+        is_landmark = 'epub:type' in m.group(0)
+        if is_landmark and li_open >= 0 and li_close >= 0:
+            start, end = li_open, li_close + len('</li>')
+            while start > 0 and text[start - 1] in ' \t':       # take the indent with it
+                start -= 1
+            if start > 0 and text[start - 1] == '\n':
+                start -= 1
+        else:
+            start, end = None, None
+
+        if start is None:
+            out.append(text[pos:m.start()])
+            out.append('<span>')
+            out.append(text[m.end():close])
+            out.append('</span>')
+            pos = close + len('</a>')
+        else:
+            if start < pos:                                    # overlapping match, leave it alone
+                continue
+            out.append(text[pos:start])
+            pos = end
+        dropped.append(href)
+        changed = True
+
+    if not changed:
+        return text, []
+    out.append(text[pos:])
+    return ''.join(out), dropped
+
+
+def _repair_navigation(zf, names, opf_name, result, replacements):
+    for nav in nav_documents(zf, names, opf_name):
+        text = replacements.get(nav) or _text(zf, nav)
+        if not text:
+            continue
+        fixed, dropped = repair_nav_links(text, nav, names)
+        if not dropped:
+            continue
+        replacements[nav] = fixed
+        result.details.append('nav  %s dropped %d link(s) to missing page(s): %s'
+                              % (nav.split('/')[-1], len(dropped), ', '.join(sorted(set(dropped)))))
+        result.ledger.append({'page': nav, 'action': 'nav-repair', 'category': 'dangling-link',
+                              'reason': 'targets not in the archive: %s' % ', '.join(dropped),
+                              'width': None, 'height': None})
+
+
+def _mark_svg_page(opf_text, opf_name, entry):
+    """``properties="svg"`` on the manifest item for ``entry``, addressed OPF-relative."""
+    opf_dir = posixpath.dirname(opf_name)
+    href = (entry[len(opf_dir) + 1:]
+            if opf_dir and entry.startswith(opf_dir + '/') else entry)
+    return add_opf_svg_property(opf_text, href)
+
+
+def _fix_cover(zf, cover_name, names, settings, result, replacements):
+    """Repair the cover page.
+
+    A cover built from a plain ``<img>`` is rebuilt from the same template as any other full-page
+    image, which is the stronger fix: the result carries no stylesheet links, so nothing from the
+    book's own CSS can reach it. A cover that is already an SVG page object is patched in place
+    instead - rewriting it would discard whatever the producer put there - and gets explicit
+    overrides for the rules that otherwise defeat it.
+
+    -> True when the page was rebuilt, so the caller can mark it ``properties="svg"``.
+    """
+    cover_text = _text(zf, cover_name)
+    if not cover_text:
+        return False
+    colour = settings['cover_color'] if settings['dark_cover'] else None
+
+    info = classify_page(zf, cover_name, names, 0.0)
+    if info is not None and info['action'] == 'rewrite':
+        w, h = info['dims']
+        replacements[cover_name] = build_svg_page(
+            info['title'], info['src'], w, h,
+            info.get('body_id'), info.get('anchor_ids') or (),
+            settings['preserve_anchors'], alt=info.get('alt'), background=colour)
+        result.image_pages += 1
+        result.cover_fixed = bool(colour)
+        result.details.append('fix  %s (cover) [%dx%d] rebuilt as a full-page image'
+                              % (cover_name.split('/')[-1], w, h))
+        result.ledger.append({'page': cover_name, 'action': 'rewrite', 'category': 'cover-image',
+                              'reason': 'cover rebuilt from the full-page template',
+                              'width': w, 'height': h})
+        return True
+
+    dirty = False
+    repaired, changed = repair_stretched_svg(cover_text)
+    if changed:
+        cover_text, dirty = repaired, True
+        result.svg_repaired += 1
+        result.details.append('svg  %s (cover) preserveAspectRatio none -> xMidYMid meet'
+                              % cover_name.split('/')[-1])
+        result.ledger.append({'page': cover_name, 'action': 'svg-repair',
+                              'category': 'cover-stretched',
+                              'reason': 'preserveAspectRatio=none on cover',
+                              'width': None, 'height': None})
+
+    # Always applied, colour or not: the sizing and margin overrides are the actual repair, and
+    # without them the book's own .calibreN rule keeps the cover at its UA default size.
+    styled, changed = set_cover_background(cover_text, colour)
+    if changed:
+        cover_text, dirty = styled, True
+        result.cover_fixed = bool(colour)
+        result.details.append('css  %s (cover) full-bleed overrides%s'
+                              % (cover_name.split('/')[-1],
+                                 ' + letterbox %s' % colour if colour else ''))
+    if dirty:
+        replacements[cover_name] = cover_text
+    return False
 
 
 def analyze_epub(path, settings=None):

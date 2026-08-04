@@ -54,7 +54,11 @@ def page(body, head_extra=""):
 
 
 def opf(version, items, spine):
-    man = "\n".join('    <item id="%s" href="%s" media-type="%s"/>' % i for i in items)
+    """items are (id, href, media-type) or (id, href, media-type, properties)."""
+    man = "\n".join(
+        '    <item id="%s" href="%s" media-type="%s"%s/>'
+        % (i[0], i[1], i[2], ' properties="%s"' % i[3] if len(i) > 3 else '')
+        for i in items)
     sp = "\n".join('    <itemref idref="%s"/>' % s for s in spine)
     return """<?xml version='1.0' encoding='utf-8'?>
 <package xmlns="http://www.idpf.org/2007/opf" version="%s" unique-identifier="uid">
@@ -189,6 +193,69 @@ build("smallimg.epub", {
     "a.png": png(700, 900),
     "p1.xhtml": small,
     "content.opf": opf("3.0", [("p1", "p1.xhtml", "application/xhtml+xml"),
+                               ("css", "style.css", "text/css"),
+                               ("i1", "a.png", "image/png")], ["p1"]),
+})
+
+# ---- 10. cover page defeated by the book's own stylesheet ----
+# Reproduces what calibre produces in practice: the cover is already an SVG page object, so it is
+# patched rather than rewritten, and a class selector on that <svg> outranks its height="100%"
+# presentation attribute. Without explicit overrides the cover is left at its UA default size.
+COVER_CSS = """
+@page { margin-top: 5pt; margin-bottom: 5pt; }
+.calibre1 { display: block; margin-left: 5pt; margin-right: 5pt; }
+.calibre2 { height: auto; width: auto; }
+"""
+
+cover_page = """<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+  <head><title>Cover</title>
+    <meta name="calibre:cover" content="true"/>
+    <link rel="stylesheet" type="text/css" href="style.css"/>
+  </head>
+  <body class="calibre1"><svg xmlns="http://www.w3.org/2000/svg"
+    xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="100%" height="100%"
+    viewBox="0 0 1284 1920" preserveAspectRatio="none" class="calibre2">
+    <image width="1284" height="1920" xlink:href="cover.png"/></svg></body>
+</html>
+"""
+build("cover.epub", {
+    "style.css": COVER_CSS,
+    "cover.png": png(1284, 1920),
+    "c0.xhtml": cover_page,
+    "p1.xhtml": page('<div><img src="cover.png" class="imgfull" alt="A map of the world"/></div>'),
+    "content.opf": opf("3.0", [("c0", "c0.xhtml", "application/xhtml+xml"),
+                               ("p1", "p1.xhtml", "application/xhtml+xml"),
+                               ("css", "style.css", "text/css"),
+                               ("img", "cover.png", "image/png")], ["c0", "p1"]),
+})
+
+# ---- 11. navigation pointing at a page that is not in the archive ----
+# calibre's conversion deletes the publisher's cover page in favour of a generated title page but
+# leaves nav.xhtml linking to the file it just removed, so "Cover" is a dead entry in the TOC.
+nav_doc = """<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"
+      xml:lang="en">
+  <head><title>Contents</title></head>
+  <body>
+    <nav epub:type="toc"><ol>
+      <li><a href="c0.xhtml">Cover</a></li>
+      <li><a href="p1.xhtml">Chapter One</a></li>
+    </ol></nav>
+    <nav epub:type="landmarks"><ol>
+      <li><a epub:type="cover" href="c0.xhtml">Cover</a></li>
+      <li><a epub:type="bodymatter" href="p1.xhtml">Start</a></li>
+    </ol></nav>
+  </body>
+</html>
+"""
+build("dangling.epub", {
+    "style.css": CSS,
+    "a.png": png(1200, 1800),
+    "p1.xhtml": page('<div><img src="a.png" class="imgfull" alt="Chapter opener"/></div>'),
+    "nav.xhtml": nav_doc,
+    "content.opf": opf("3.0", [("nav", "nav.xhtml", "application/xhtml+xml", "nav"),
+                               ("p1", "p1.xhtml", "application/xhtml+xml"),
                                ("css", "style.css", "text/css"),
                                ("i1", "a.png", "image/png")], ["p1"]),
 })

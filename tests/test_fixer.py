@@ -91,6 +91,33 @@ def test_fixtures(workdir):
         check('anchors', 'id="%s"' % a in t, 'anchor id %r preserved' % a)
     check('anchors', '<svg' in t, 'page rewritten')
 
+    # ---- the cover has to survive the book's own stylesheet ----
+    z = zipfile.ZipFile(os.path.join(out, 'cover.epub'))
+    t = page(z, 'c0.xhtml')
+    sv = ET.fromstring(t).find('.//' + SVG + 'svg')
+    check('cover', sv.get('preserveAspectRatio') == 'xMidYMid meet',
+          'stretched cover repaired')
+    for want in ('width: auto !important', 'height: 100% !important', 'margin: 0 !important'):
+        check('cover', want in t, 'overrides .calibre2 with %r' % want)
+    check('cover', '@page { margin: 0' in t, 'the 5pt page margin is cancelled')
+    check('cover', t.count(fixer.COVER_MARKER) == 2, 'the injected block is delimited at both ends')
+
+    # ---- alt text becomes the SVG's accessible name ----
+    t = page(z, 'p1.xhtml')
+    check('alt', 'role="img"' in t, 'rewritten page is exposed as an image')
+    check('alt', '<title id="%s">A map of the world</title>' % fixer.SVG_TITLE_ID in t,
+          'alt text carried across as the accessible name')
+
+    # ---- navigation links to pages that are not there ----
+    z = zipfile.ZipFile(os.path.join(out, 'dangling.epub'))
+    t = page(z, 'nav.xhtml')
+    check('nav', 'c0.xhtml' not in t, 'the dangling link to the deleted cover page is gone')
+    check('nav', '<span>Cover</span>' in t, 'the TOC entry survives as unlinked text')
+    landmarks = t.split('epub:type="landmarks"')[1]
+    check('nav', 'epub:type="cover"' not in landmarks and 'bodymatter' in landmarks,
+          'the landmarks entry is dropped whole, the valid one is kept')
+    check('nav', 'p1.xhtml' in t, 'links that do resolve are untouched')
+
     for f in sorted(os.listdir(out)):
         if not f.endswith('.epub'):
             continue

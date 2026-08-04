@@ -198,21 +198,3 @@ def run_single(job, notifications=None, abort=None, log=None):
     res['book_id'] = job.get('book_id')
     res['title'] = title
     return res
-
-
-def run_batch(jobs, notifications=None, abort=None, log=None):
-    """Process several books in one job. Kept for callers that want a single batch job."""
-    out = []
-    total = max(1, len(jobs))
-    for i, job in enumerate(jobs, 1):
-        if abort is not None and abort.is_set():
-            break
-        _notify(notifications, i / float(total), _('Processing %s') % job.get('title', ''))
-        res = process_book(
-            job['path'], job['settings'], job.get('polish_ops'),
-            job.get('target_version', '3'), job.get('convert_from'),
-            job.get('recommendations'), log)
-        res['book_id'] = job.get('book_id')
-        res['title'] = job.get('title', res['name'])
-        out.append(res)
-    return out

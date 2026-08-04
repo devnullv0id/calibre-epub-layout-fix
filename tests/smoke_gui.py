@@ -79,11 +79,26 @@ def main():
         w.commit()
     check('PolishWidget builds and commits', build_polish_panel)
 
+    def build_automation_panel():
+        w = panel.AutomationWidget(None)
+        assert w.TITLE
+        w.commit()
+        # the master switch has to survive a round-trip, and default to off
+        assert isinstance(config.auto_settings()['enabled'], bool)
+    check('AutomationWidget builds and commits', build_automation_panel)
+
     def build_dialog():
         d = dialog.FixOnlyDialog(None)
         assert d.categories.count() == 2, 'expected two categories'
         assert d.stack.count() == 2
     check('FixOnlyDialog builds', build_dialog)
+
+    def build_config_widget():
+        w = config.ConfigWidget()
+        titles = [p.TITLE for p in w.panels]
+        assert 'Automatic' in titles, 'Automatic panel missing from the config widget: %s' % titles
+        w.save_settings()
+    check('ConfigWidget builds all three panels', build_config_widget)
 
     def settings_roundtrip():
         s = config.current_settings()
@@ -92,6 +107,15 @@ def main():
         enabled, ops = config.polish_settings()
         assert isinstance(ops, dict)
         assert config.target_epub_version() in ('2', '3')
+
+        # nothing that reaches out to the network or scans the machine may run unattended
+        _en, auto_ops = config.polish_settings(automatic=True)
+        for key in config.AUTO_POLISH_EXCLUDED:
+            assert not auto_ops.get(key), '%s must be off for automatic runs' % key
+
+        a = config.auto_settings()
+        assert set(a) == {'enabled', 'convert_formats', 'debounce', 'max_books'}
+        assert 1 <= a['debounce'] <= 60
     check('settings round-trip', settings_roundtrip)
 
     def engine_is_gui_free():

@@ -3,6 +3,7 @@
 
     python build.py            # -> dist/EPUB-Layout-Fix.zip
     python build.py --install  # also runs calibre-customize -a on it
+    python build.py --restart  # close calibre, build, install, start calibre again
 
 The zip is flat: calibre expects __init__.py, the plugin-import-name marker and any icons at the
 archive root, not inside a folder.
@@ -15,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +77,67 @@ def calibre_is_running():
         return False
 
 
+def calibre_exe(name='calibre'):
+    """The full path to one of calibre's executables, or None."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for folder in (r'C:\Program Files\Calibre2', r'C:\Program Files (x86)\Calibre2',
+                   '/Applications/calibre.app/Contents/MacOS', '/usr/bin', '/usr/local/bin'):
+        cand = os.path.join(folder, name + ('.exe' if sys.platform == 'win32' else ''))
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def stop_calibre(timeout=30):
+    """Ask calibre to quit, then insist. -> True once nothing is running.
+
+    calibre writes its plugin list out on exit, so it has to be *gone* before the install, not
+    merely asked to leave.
+    """
+    if not calibre_is_running():
+        return True
+
+    print('closing calibre...')
+    if sys.platform == 'win32':
+        # /IM without /F sends WM_CLOSE, which lets calibre save its state properly
+        subprocess.run(['taskkill', '/IM', 'calibre.exe'], capture_output=True, text=True)
+    else:
+        subprocess.run(['pkill', '-x', 'calibre'], capture_output=True, text=True)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not calibre_is_running():
+            # the GUI process is gone; give it a moment to finish flushing its config
+            time.sleep(1.0)
+            return True
+        time.sleep(0.5)
+
+    print('  still running after %ds, forcing' % timeout)
+    if sys.platform == 'win32':
+        subprocess.run(['taskkill', '/F', '/IM', 'calibre.exe'], capture_output=True, text=True)
+    else:
+        subprocess.run(['pkill', '-9', '-x', 'calibre'], capture_output=True, text=True)
+    time.sleep(2.0)
+    return not calibre_is_running()
+
+
+def start_calibre():
+    exe = calibre_exe('calibre')
+    if not exe:
+        print('calibre executable not found; start it yourself')
+        return 1
+    print('starting', exe)
+    kwargs = {}
+    if sys.platform == 'win32':
+        kwargs['creationflags'] = getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
+    else:
+        kwargs['start_new_session'] = True
+    subprocess.Popen([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
+    return 0
+
+
 def install(path):
     if calibre_is_running():
         print('REFUSING to install: calibre is running.\n'
@@ -82,27 +145,39 @@ def install(path):
               '  in-memory plugin list back over the change.\n'
               '  Close calibre and re-run, or load the zip from Preferences -> Plugins.')
         return 1
-    exe = shutil.which('calibre-customize')
-    for cand in (exe, r'C:\Program Files\Calibre2\calibre-customize.exe'):
-        if cand and os.path.exists(cand):
-            print('installing with', cand)
-            r = subprocess.run([cand, '-a', path], capture_output=True, text=True)
-            print(r.stdout.strip() or r.stderr.strip())
-            return r.returncode
-    print('calibre-customize not found; load the zip manually via '
-          'Preferences -> Plugins -> Load plugin from file')
-    return 1
+    exe = calibre_exe('calibre-customize')
+    if not exe:
+        print('calibre-customize not found; load the zip manually via '
+              'Preferences -> Plugins -> Load plugin from file')
+        return 1
+    print('installing with', exe)
+    r = subprocess.run([exe, '-a', path], capture_output=True, text=True)
+    print(r.stdout.strip() or r.stderr.strip())
+    return r.returncode
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('-i', '--install', action='store_true', help='install after building')
+    ap.add_argument('-r', '--restart', action='store_true',
+                    help='close calibre, build, install, then start calibre again')
     args = ap.parse_args()
+
+    if args.restart and not stop_calibre():
+        print('could not close calibre; aborting rather than installing into a running instance')
+        return 1
+
     # Build first, always. An earlier version bailed out before building when calibre was
     # running, which left a stale zip on disk that looked freshly built.
     path = build()
-    if args.install:
-        return install(path)
+
+    if args.install or args.restart:
+        rc = install(path)
+        if args.restart:
+            # Start calibre back up even if the install failed, so the user is never left
+            # without their library because of a build error.
+            start_calibre()
+        return rc
     return 0
 
 

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +100,93 @@ def check_convert_dialog(legacy_db, book_id):
     d.break_cycles()
 
 
+def check_import_watcher(db, make_epub, tmp):
+    """The automatic run must fire on a real import - and exactly once per book.
+
+    Committing a repaired book calls add_format, which raises the same event that started the
+    run. If the guards were wrong the plugin would process its own output forever, so the
+    important assertion here is the second one: nothing fires while a book is suppressed.
+    """
+    print('\n=== automatic run on import ===')
+    from calibre.ebooks.metadata.book.base import Metadata
+    try:
+        from qt.core import QApplication, QEventLoop
+    except ImportError:
+        from PyQt5.Qt import QApplication, QEventLoop
+    from calibre.gui2 import Application
+    QApplication.instance() or Application(sys.argv[:1])
+
+    from calibre_plugins.epub_layout_fix.automation import ImportWatcher
+    from calibre_plugins.epub_layout_fix.config import prefs
+
+    calls = []
+
+    class FakeAction(object):
+        gui = None
+
+        def run_automatic(self, book_ids):
+            calls.append(list(book_ids))
+
+    saved = {k: prefs.get(k) for k in ('auto_on_import', 'auto_debounce_secs')}
+    prefs['auto_on_import'] = True
+    prefs['auto_debounce_secs'] = 1
+
+    watcher = ImportWatcher(FakeAction())
+    watcher.attach(db)
+
+    def pump(seconds):
+        """Spin the event loop - the listener thread and the debounce timer both need it."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+            time.sleep(0.02)
+
+    try:
+        # --- a book arriving normally is picked up ---
+        src = make_epub(os.path.join(tmp, 'imported.epub'))
+        mi = Metadata('Imported Book', ['Someone'])
+        new_id = db.add_books([(mi, {'EPUB': src})], add_duplicates=True)[0][0]
+        pump(4)
+        check('auto', calls and new_id in calls[0],
+              'a newly added book reaches run_automatic (%r)' % calls)
+        check('auto', len(calls) == 1, 'exactly one batch, not one call per event (%d)' % len(calls))
+
+        # --- our own write-back must not start it again ---
+        calls[:] = []
+        watcher.suppress([new_id])
+        with open(src, 'rb') as f:
+            db.add_format(new_id, 'EPUB', f, run_hooks=False)
+        pump(4)
+        check('auto', not calls, 'a suppressed book does not re-trigger (%r)' % calls)
+
+        # --- and a book already carrying our backup is left alone ---
+        calls[:] = []
+        watcher._seen.clear()
+        watcher._suppressed.clear()
+        db.save_original_format(new_id, 'EPUB')
+        with open(src, 'rb') as f:
+            db.add_format(new_id, 'EPUB', f, run_hooks=False)
+        pump(4)
+        check('auto', not calls, 'a book with ORIGINAL_EPUB is skipped (%r)' % calls)
+
+        # --- off means off ---
+        calls[:] = []
+        watcher._seen.clear()
+        prefs['auto_on_import'] = False
+        mi2 = Metadata('Second Book', ['Someone'])
+        db.add_books([(mi2, {'EPUB': make_epub(os.path.join(tmp, 'imported2.epub'))})],
+                     add_duplicates=True)
+        pump(3)
+        check('auto', not calls, 'nothing happens while the setting is off (%r)' % calls)
+    finally:
+        watcher.detach()
+        for k, v in saved.items():
+            if v is None:
+                prefs.pop(k, None)
+            else:
+                prefs[k] = v
+
+
 def main():
     from calibre.customize.ui import initialize_plugins
     initialize_plugins()
@@ -157,6 +245,9 @@ def main():
 
         # --- the combined conversion window --------------------------------------------
         check_convert_dialog(ldb, book_id)
+
+        # --- the automatic run on import -----------------------------------------------
+        check_import_watcher(db, make_broken_epub, tmp)
 
         # --- calibre's own Restore original --------------------------------------------
         db.restore_original_format(book_id, 'ORIGINAL_EPUB')
