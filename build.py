@@ -61,7 +61,27 @@ def build():
     return out
 
 
+def calibre_is_running():
+    """Installing while the GUI is open is silently undone: calibre writes its stale in-memory
+    plugin list back on exit, removing the freshly installed zip."""
+    try:
+        if sys.platform == 'win32':
+            out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq calibre.exe'],
+                                 capture_output=True, text=True).stdout
+            return 'calibre.exe' in out
+        out = subprocess.run(['pgrep', '-x', 'calibre'], capture_output=True, text=True)
+        return out.returncode == 0
+    except Exception:                                          # noqa: BLE001
+        return False
+
+
 def install(path):
+    if calibre_is_running():
+        print('REFUSING to install: calibre is running.\n'
+              '  Installing now would be undone when calibre exits - it writes its stale\n'
+              '  in-memory plugin list back over the change.\n'
+              '  Close calibre and re-run, or load the zip from Preferences -> Plugins.')
+        return 1
     exe = shutil.which('calibre-customize')
     for cand in (exe, r'C:\Program Files\Calibre2\calibre-customize.exe'):
         if cand and os.path.exists(cand):
@@ -78,6 +98,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('-i', '--install', action='store_true', help='install after building')
     args = ap.parse_args()
+    # Build first, always. An earlier version bailed out before building when calibre was
+    # running, which left a stale zip on disk that looked freshly built.
     path = build()
     if args.install:
         return install(path)

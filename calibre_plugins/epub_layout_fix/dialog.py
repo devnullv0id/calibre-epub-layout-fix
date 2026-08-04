@@ -98,19 +98,37 @@ def make_convert_dialog(gui, db, book_id, preferred_input=None):
 
         def setup_pipeline(self, *args):
             Config.setup_pipeline(self, *args)
-            # setup_pipeline re-runs whenever the input/output format combo changes, so this
-            # must rebuild rather than append blindly.
+
+            # setup_pipeline re-runs whenever the input/output format combo changes, so rebuild
+            # rather than append blindly, or the panels would multiply.
             self.widgets = [w for w in self.widgets
                             if not isinstance(w, (LayoutFixWidget, PolishWidget))]
-            self.plugin_panels = [PolishWidget(self.stack if hasattr(self, 'stack') else self),
-                                  LayoutFixWidget(self.stack if hasattr(self, 'stack') else self)]
+            self.plugin_panels = [PolishWidget(self), LayoutFixWidget(self)]
             self.widgets.extend(self.plugin_panels)
+
             self._groups_model = GroupModel(self.widgets)
             self.groups.setModel(self._groups_model)
-            try:
-                self.groups.setCurrentIndex(self._groups_model.index(0))
-            except Exception:                                  # noqa: BLE001
-                pass
 
-    return ConvertAndFixDialog(gui, db, book_id, preferred_input_format=preferred_input,
-                               preferred_output_format='EPUB')
+            # setModel gives the view a brand new selection model, which orphans the connection
+            # calibre made inside setup_pipeline - without this the category list highlights but
+            # the pane never changes.
+            self.groups.selectionModel().currentChanged.connect(self.current_group_changed)
+            self.groups.setCurrentIndex(self._groups_model.index(0))
+            self.show_pane(0)
+
+    d = ConvertAndFixDialog(gui, db, book_id, preferred_input_format=preferred_input,
+                            preferred_output_format='EPUB')
+
+    # The repairs only apply to EPUB, so do not offer an output format that cannot receive them.
+    try:
+        combo = d.output_formats
+        combo.blockSignals(True)          # changing this re-triggers setup_pipeline
+        combo.clear()
+        combo.addItem('EPUB')
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        combo.setEnabled(False)
+        combo.setToolTip(_('This plugin only repairs EPUB, so the output format is fixed.'))
+    except Exception:                                          # noqa: BLE001 - cosmetic only
+        pass
+    return d

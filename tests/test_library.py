@@ -33,6 +33,72 @@ def make_broken_epub(dest):
     return dest
 
 
+def check_convert_dialog(legacy_db, book_id):
+    """Build the real conversion window with our panels and drive its category list.
+
+    Selecting a category must actually change the visible pane - replacing the group model
+    hands the view a new selection model, which silently orphans calibre's own connection.
+    """
+    from calibre_plugins.epub_layout_fix.dialog import make_convert_dialog
+    from calibre_plugins.epub_layout_fix.panel import LayoutFixWidget, PolishWidget
+
+    try:
+        from qt.core import QApplication, QWidget
+    except ImportError:
+        from PyQt5.Qt import QApplication, QWidget
+    # calibre's own Application subclass, not a bare QApplication: the metadata panel reaches for
+    # Application.is_dark_theme, and a plain QApplication takes the whole process down.
+    from calibre.gui2 import Application
+    QApplication.instance() or Application(sys.argv[:1])
+
+    # Config expects the legacy database wrapper, not the new_api Cache. The parent must be held
+    # in a local - a temporary QWidget is collected and takes the dialog's children with it.
+    parent = QWidget()
+    d = make_convert_dialog(parent, legacy_db, book_id)
+    titles = [w.TITLE for w in d.widgets]
+    check('dialog', 'Layout fixes' in titles, 'Layout fixes panel present (%d panels)' % len(titles))
+    check('dialog', 'Polish' in titles, 'Polish panel present')
+    check('dialog', sum(isinstance(w, (LayoutFixWidget, PolishWidget)) for w in d.widgets) == 2,
+          'exactly one of each plugin panel (no duplicates)')
+
+    fmts = [d.output_formats.itemText(i) for i in range(d.output_formats.count())]
+    check('dialog', fmts == ['EPUB'], 'output format restricted to EPUB (got %r)' % fmts)
+    check('dialog', not d.output_formats.isEnabled(), 'output format combo disabled')
+
+    # every category must swap the pane in
+    seen = []
+    for row in range(d._groups_model.rowCount()):
+        d.groups.setCurrentIndex(d._groups_model.index(row))
+        seen.append(d.scrollArea.widget() is d.widgets[row])
+    check('dialog', all(seen), 'selecting each category shows its pane (%d/%d correct)'
+          % (sum(seen), len(seen)))
+
+    # Config.accept() does recommendations.update(widget.commit(...)) against a dict, so every
+    # panel must return a mapping. Returning a bool raises "'bool' object is not iterable" and
+    # the OK button simply fails.
+    for w in d.widgets:
+        got = w.commit(save_defaults=False)
+        check('dialog', hasattr(got, 'keys'),
+              '%s.commit() returns a mapping, not %s' % (w.TITLE.replace('\n', ' '),
+                                                         type(got).__name__))
+
+    # and the real thing: accepting the dialog must not raise
+    try:
+        d.accept()
+        check('dialog', True, 'accept() completes without raising')
+    except Exception as e:                                     # noqa: BLE001
+        check('dialog', False, 'accept() raised %s: %s' % (type(e).__name__, e))
+
+    # re-running setup_pipeline (what the input-format combo does) must not duplicate panels
+    d.setup_pipeline()
+    n = sum(isinstance(w, (LayoutFixWidget, PolishWidget)) for w in d.widgets)
+    check('dialog', n == 2, 'panels not duplicated after setup_pipeline re-runs (found %d)' % n)
+    d.groups.setCurrentIndex(d._groups_model.index(0))
+    check('dialog', d.scrollArea.widget() is d.widgets[0],
+          'pane switching still works after the rebuild')
+    d.break_cycles()
+
+
 def main():
     from calibre.customize.ui import initialize_plugins
     initialize_plugins()
@@ -48,7 +114,8 @@ def main():
     try:
         lib = os.path.join(tmp, 'lib')
         os.makedirs(lib)
-        db = LibraryDatabase(lib).new_api
+        ldb = LibraryDatabase(lib)
+        db = ldb.new_api
 
         book = make_broken_epub(os.path.join(tmp, 'broken.epub'))
         mi = Metadata('Test Book', ['Test Author'])
@@ -87,6 +154,9 @@ def main():
         i0 = z.infolist()[0]
         check('result', i0.filename == 'mimetype' and i0.compress_type == 0
               and z.testzip() is None, 'archive sound in the library')
+
+        # --- the combined conversion window --------------------------------------------
+        check_convert_dialog(ldb, book_id)
 
         # --- calibre's own Restore original --------------------------------------------
         db.restore_original_format(book_id, 'ORIGINAL_EPUB')

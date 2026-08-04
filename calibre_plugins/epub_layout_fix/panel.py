@@ -50,12 +50,19 @@ class _PluginWidget(Widget):
         return True
 
     def commit(self, save_defaults=False):
+        """Persist our settings and return an EMPTY RECOMMENDATIONS MAPPING.
+
+        calibre's Config.accept() does ``recommendations.update(widget.commit(...))`` against a
+        GuiRecommendations, which is a dict. Returning a bool here raises
+        "TypeError: 'bool' object is not iterable" and the dialog cannot be accepted. We
+        contribute no conversion options, so the correct return value is ``{}``.
+        """
         self.save()
-        return True
+        return {}
 
     def commit_options(self, save_defaults=False):
         self.save()
-        return True
+        return {}
 
     def restore_defaults(self, get_option=None):
         for key in self.KEYS:
