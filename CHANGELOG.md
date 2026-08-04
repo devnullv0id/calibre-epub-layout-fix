@@ -36,5 +36,5 @@ First working version.
 - Test suites: engine fixtures and parity, an offscreen Qt smoke test, and an end-to-end pipeline
   test.
 
-[Unreleased]: https://github.com/devnullv0id/EPUB-Layout-Fix/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/devnullv0id/EPUB-Layout-Fix/releases/tag/v0.1.0
+[Unreleased]: https://github.com/devnullv0id/calibre-epub-layout-fix/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/devnullv0id/calibre-epub-layout-fix/releases/tag/v0.1.0
