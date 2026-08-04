@@ -96,31 +96,43 @@ def convert_to_epub(src_path, dest_path, recommendations=None, log=None, target_
 
 
 def process_book(path, settings, polish_ops=None, target_version='3',
-                 convert_from=None, recommendations=None, log=None):
+                 convert_from=None, recommendations=None, log=None, progress=None):
     """The whole pipeline for one file: convert -> polish -> upgrade -> fix.
+
+    ``progress(fraction, message)`` is called as each stage starts, so the job list shows what
+    is actually happening rather than a single "Starting ..." for the whole run.
 
     Returns a plain dict so it crosses the job boundary cleanly.
     """
+    def step(frac, msg):
+        if progress is not None:
+            progress(frac, msg)
+
     steps = []
     try:
         if convert_from:
+            step(0.05, _('Converting to EPUB'))
             ok, msg = convert_to_epub(convert_from, path, recommendations, log, target_version)
             steps.append(('convert', ok, msg))
             if not ok:
                 return _as_dict(path, steps, None, 'conversion failed: %s' % msg)
 
         if polish_ops:
+            step(0.55, _('Polishing'))
             ok, msg = run_polish(path, polish_ops, log)
             steps.append(('polish', ok, msg))
             # a failed polish is not fatal; the layout fixes are still worth applying
 
         if target_version == '3':
+            step(0.75, _('Upgrading to EPUB 3'))
             ok, msg = upgrade_to_epub3(path, log)
             steps.append(('upgrade', ok, msg))
 
+        step(0.85, _('Repairing images and cover'))
         result = fixer.fix_epub(path, settings)
         steps.append(('fix', not result.error and not result.problems,
                       result.error or '; '.join(result.problems)))
+        step(1.0, _('Done'))
         return _as_dict(path, steps, result, result.error)
     except Exception:                                          # noqa: BLE001
         return _as_dict(path, steps, None, traceback.format_exc())
@@ -170,27 +182,19 @@ def run_single(job, notifications=None, abort=None, log=None):
     can be cancelled individually, instead of a single opaque batch job.
     """
     title = job.get('title') or os.path.basename(job['path'])
-    steps = []
-    if job.get('convert_from'):
-        steps.append('convert')
-    if job.get('polish_ops'):
-        steps.append('polish')
-    if job.get('target_version', '3') == '3':
-        steps.append('upgrade')
-    steps.append('fix')
 
-    _notify(notifications, 0.01, _('Starting %s') % title)
+    _notify(notifications, 0.01, _('Starting'))
     if abort is not None and abort.is_set():
         return _as_dict(job['path'], [], None, 'cancelled')
 
-    # process_book runs the stages itself; report a coarse fraction as each completes by
-    # wrapping it with a progress-aware log-free call
+    def progress(frac, msg):
+        _notify(notifications, frac, msg)
+
     res = process_book(
         job['path'], job['settings'], job.get('polish_ops'),
         job.get('target_version', '3'), job.get('convert_from'),
-        job.get('recommendations'), log)
+        job.get('recommendations'), log, progress=progress)
 
-    _notify(notifications, 1.0, _('Finished %s') % title)
     res['book_id'] = job.get('book_id')
     res['title'] = title
     return res
