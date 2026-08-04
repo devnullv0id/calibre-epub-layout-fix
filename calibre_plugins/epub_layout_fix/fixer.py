@@ -360,6 +360,28 @@ def opf_version(opf_text):
     return m.group(1) if m else '2.0'
 
 
+def epub_version(path):
+    """The EPUB version of a book on disk, e.g. ``'3.0'``. ``None`` if it cannot be read.
+
+    Used to decide whether the book needs upgrading before the fixes are applied - the
+    ``properties="svg"`` manifest attribute only exists in EPUB 3.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = [i.filename for i in zf.infolist() if not i.filename.endswith('/')]
+            opf_name = find_opf(zf, names)
+            if not opf_name:
+                return None
+            return opf_version(_text(zf, opf_name))
+    except Exception:                                         # noqa: BLE001 - caller decides
+        return None
+
+
+def is_epub3(path):
+    v = epub_version(path)
+    return bool(v and v.startswith('3'))
+
+
 def content_documents(zf, names, opf_name):
     """Content documents, driven by the OPF manifest with an extension scan as backstop.
 

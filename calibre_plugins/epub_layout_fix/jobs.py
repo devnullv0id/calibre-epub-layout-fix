@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Worker entry points.
+
+Everything here runs on calibre's job thread. It must not touch the GUI or the library database
+- book data arrives as file paths and results go back through the return value, with the caller
+writing to the library on the GUI thread.
+"""
+
+from __future__ import annotations
+
+import os
+import traceback
+
+from calibre_plugins.epub_layout_fix import fixer
+
+__license__ = 'GPL v3'
+
+
+def upgrade_to_epub3(path, log=None):
+    """Run calibre's own "Upgrade book internals" on a file in place.
+
+    Returns ``(ok, message)``. Already-EPUB 3 books are left alone.
+    """
+    if fixer.is_epub3(path):
+        return True, 'already EPUB 3'
+    return run_polish(path, {'upgrade_book': True}, log=log)
+
+
+def run_polish(path, operations, log=None, cover_path=None, opf_path=None):
+    """Run calibre's polish on a file in place.
+
+    ``operations`` is the ``{option: bool}`` map from the Polish panel. Options calibre expects
+    as file paths (cover, opf) are supplied separately when the caller has them.
+    """
+    enabled = {k: v for k, v in (operations or {}).items() if v}
+    if not enabled and not cover_path and not opf_path:
+        return True, 'nothing to do'
+
+    try:
+        from calibre.ebooks.oeb.polish.main import ALL_OPTS, polish
+        from calibre.utils.logging import Log
+    except ImportError as e:
+        return False, 'polish unavailable: %s' % e
+
+    class _Opts(object):
+        pass
+
+    opts = _Opts()
+    for key, default in ALL_OPTS.items():
+        setattr(opts, key, enabled.get(key, default))
+    if cover_path:
+        opts.cover = cover_path
+    if opf_path:
+        opts.opf = opf_path
+
+    messages = []
+
+    def report(msg):
+        messages.append(str(msg))
+
+    try:
+        polish({path: path}, opts, log or Log(), report)
+    except Exception as e:                                     # noqa: BLE001
+        return False, '%s: %s' % (type(e).__name__, e)
+    return True, '; '.join(messages[-3:])
+
+
+def convert_to_epub(src_path, dest_path, recommendations=None, log=None):
+    """Convert any calibre-readable format to EPUB, in process.
+
+    ``preserve_cover_aspect_ratio`` is forced on: without it calibre regenerates the cover with
+    preserveAspectRatio="none", which is one of the defects this plugin exists to repair.
+    """
+    try:
+        from calibre.customize.conversion import OptionRecommendation
+        from calibre.ebooks.conversion.plumber import Plumber
+        from calibre.utils.logging import Log
+    except ImportError as e:
+        return False, 'conversion unavailable: %s' % e
+
+    try:
+        plumber = Plumber(src_path, dest_path, log or Log())
+        recs = list(recommendations or [])
+        recs.append(('preserve_cover_aspect_ratio', True, OptionRecommendation.HIGH))
+        plumber.merge_ui_recommendations(recs)
+        plumber.run()
+    except Exception as e:                                     # noqa: BLE001
+        return False, '%s: %s' % (type(e).__name__, e)
+    return True, ''
+
+
+def process_book(path, settings, polish_ops=None, target_version='3',
+                 convert_from=None, recommendations=None, log=None):
+    """The whole pipeline for one file: convert -> polish -> upgrade -> fix.
+
+    Returns a plain dict so it crosses the job boundary cleanly.
+    """
+    steps = []
+    try:
+        if convert_from:
+            ok, msg = convert_to_epub(convert_from, path, recommendations, log)
+            steps.append(('convert', ok, msg))
+            if not ok:
+                return _as_dict(path, steps, None, 'conversion failed: %s' % msg)
+
+        if polish_ops:
+            ok, msg = run_polish(path, polish_ops, log)
+            steps.append(('polish', ok, msg))
+            # a failed polish is not fatal; the layout fixes are still worth applying
+
+        if target_version == '3':
+            ok, msg = upgrade_to_epub3(path, log)
+            steps.append(('upgrade', ok, msg))
+
+        result = fixer.fix_epub(path, settings)
+        steps.append(('fix', not result.error and not result.problems,
+                      result.error or '; '.join(result.problems)))
+        return _as_dict(path, steps, result, result.error)
+    except Exception:                                          # noqa: BLE001
+        return _as_dict(path, steps, None, traceback.format_exc())
+
+
+def _as_dict(path, steps, result, error):
+    d = {
+        'path': path,
+        'name': os.path.basename(path),
+        'steps': steps,
+        'error': error,
+        'image_pages': 0,
+        'svg_repaired': 0,
+        'cover_fixed': False,
+        'skipped': 0,
+        'changed': False,
+        'details': [],
+        'ledger': [],
+        'problems': [],
+    }
+    if result is not None:
+        d.update({
+            'image_pages': result.image_pages,
+            'svg_repaired': result.svg_repaired,
+            'cover_fixed': result.cover_fixed,
+            'skipped': result.skipped,
+            'changed': result.changed,
+            'details': list(result.details),
+            'ledger': list(result.ledger),
+            'problems': list(result.problems),
+        })
+    return d
+
+
+def run_batch(jobs, notifications=None, abort=None, log=None):
+    """Process a list of ``dict`` job descriptions. Entry point for ThreadedJob."""
+    out = []
+    total = max(1, len(jobs))
+    for i, job in enumerate(jobs, 1):
+        if abort is not None and abort.is_set():
+            break
+        if notifications is not None:
+            notifications.put((i / float(total), _('Processing %s') % job.get('title', '')))
+        res = process_book(
+            job['path'], job['settings'], job.get('polish_ops'),
+            job.get('target_version', '3'), job.get('convert_from'),
+            job.get('recommendations'), log)
+        res['book_id'] = job.get('book_id')
+        res['title'] = job.get('title', res['name'])
+        out.append(res)
+    return out
