@@ -52,8 +52,8 @@ def main():
     def actions_registered():
         from calibre.customize.ui import initialized_plugins
         names = {p.name for p in initialized_plugins()}
-        for want in ('Fix EPUB layout', 'Fix EPUB layout (last settings)',
-                     'Convert to EPUB and fix layout'):
+        for want in ('EPUB Layout Fix', 'EPUB Layout Fix - quick run',
+                     'EPUB Layout Fix - convert and fix'):
             assert want in names, 'missing action: %s' % want
     check('all three actions registered', actions_registered)
 

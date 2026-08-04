@@ -34,14 +34,14 @@ class _Base(InterfaceActionBase):
 
 
 class ConvertAndFixAction(_Base):
-    name = 'Convert to EPUB and fix layout'
+    name = 'EPUB Layout Fix - convert and fix'
     description = ('Convert the selected books to EPUB using the normal conversion window, with '
                    'an added Layout fixes panel, then repair full-page images and covers')
     actual_plugin = 'calibre_plugins.epub_layout_fix.ui:ConvertAndFixGui'
 
 
 class FixLayoutQuickAction(_Base):
-    name = 'Fix EPUB layout (last settings)'
+    name = 'EPUB Layout Fix - quick run'
     description = ('Repair the selected books immediately using the stored settings, without '
                    'showing a dialog')
     actual_plugin = 'calibre_plugins.epub_layout_fix.ui:FixLayoutQuickGui'
@@ -56,7 +56,7 @@ class FixLayoutAction(_Base):
     and it is what makes all three appear separately under Preferences -> Toolbars & menus.
     """
 
-    name = 'Fix EPUB layout'
+    name = 'EPUB Layout Fix'
     description = ('Repair full-page images and covers in EPUB books so they fit the screen. '
                    'Adds three toolbar actions.')
     actual_plugin = 'calibre_plugins.epub_layout_fix.ui:FixLayoutGui'

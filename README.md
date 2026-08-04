@@ -111,9 +111,9 @@ Three actions are contributed, each placeable independently:
 
 | Action | What it does |
 |---|---|
-| **Fix layout…** | Opens the settings window, then repairs the selected books' existing EPUB |
-| **Fix layout (last settings)** | Repairs immediately with the stored settings, no dialog |
-| **Convert to EPUB and fix…** | calibre's own conversion window with **Polish** and **Layout fixes** panels added; converts, polishes, then repairs |
+| **EPUB Layout Fix** | Opens the settings window, then repairs the selected books' existing EPUB |
+| **EPUB Layout Fix - quick run** | Repairs immediately with the stored settings, no dialog |
+| **EPUB Layout Fix - convert and fix** | calibre's own conversion window with **Polish** and **Layout fixes** panels added; converts, polishes, then repairs |
 
 The conversion window is calibre's real one — Metadata, Look & feel, Page setup and the rest are
 unchanged — with two extra categories in the left-hand list.

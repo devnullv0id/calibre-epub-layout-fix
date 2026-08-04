@@ -153,7 +153,7 @@ class _BaseGui(InterfaceAction):
 class FixLayoutQuickGui(_BaseGui):
     """Run immediately with the stored settings."""
 
-    name = 'Fix EPUB layout (last settings)'
+    name = 'EPUB Layout Fix - quick run'
     action_spec = (_('Fix layout'), ICON,
                    _('Repair full-page images and covers using the stored settings'), None)
 
@@ -171,7 +171,7 @@ class FixLayoutQuickGui(_BaseGui):
 class FixLayoutGui(_BaseGui):
     """Show the settings window, then run."""
 
-    name = 'Fix EPUB layout'
+    name = 'EPUB Layout Fix'
     action_spec = (_('Fix layout...'), ICON,
                    _('Choose the repairs to apply, then fix the selected books'), None)
     action_add_menu = True
@@ -201,7 +201,7 @@ class FixLayoutGui(_BaseGui):
         self._start(jobs, _('Fixing layout of %d book(s)') % len(jobs))
 
     def run_convert(self):
-        act = self.gui.iactions.get('Convert to EPUB and fix layout')
+        act = self.gui.iactions.get('EPUB Layout Fix - convert and fix')
         if act is not None:
             return act.run()
         error_dialog(self.gui, _('Not available'),
@@ -230,7 +230,7 @@ class FixLayoutGui(_BaseGui):
 class ConvertAndFixGui(_BaseGui):
     """calibre's conversion window with our panels, then convert -> polish -> fix."""
 
-    name = 'Convert to EPUB and fix layout'
+    name = 'EPUB Layout Fix - convert and fix'
     action_spec = (_('Convert to EPUB and fix...'), ICON,
                    _('Convert the selected books to EPUB with the layout fixes applied'), None)
 
