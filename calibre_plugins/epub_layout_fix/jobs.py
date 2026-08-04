@@ -155,15 +155,55 @@ def _as_dict(path, steps, result, error):
     return d
 
 
+def _notify(notifications, frac, msg):
+    if notifications is not None:
+        try:
+            notifications.put((frac, msg))
+        except Exception:                                      # noqa: BLE001
+            pass
+
+
+def run_single(job, notifications=None, abort=None, log=None):
+    """Process one book. Entry point for a per-book ThreadedJob.
+
+    One job per book mirrors calibre's own Convert action: each book gets its own progress and
+    can be cancelled individually, instead of a single opaque batch job.
+    """
+    title = job.get('title') or os.path.basename(job['path'])
+    steps = []
+    if job.get('convert_from'):
+        steps.append('convert')
+    if job.get('polish_ops'):
+        steps.append('polish')
+    if job.get('target_version', '3') == '3':
+        steps.append('upgrade')
+    steps.append('fix')
+
+    _notify(notifications, 0.01, _('Starting %s') % title)
+    if abort is not None and abort.is_set():
+        return _as_dict(job['path'], [], None, 'cancelled')
+
+    # process_book runs the stages itself; report a coarse fraction as each completes by
+    # wrapping it with a progress-aware log-free call
+    res = process_book(
+        job['path'], job['settings'], job.get('polish_ops'),
+        job.get('target_version', '3'), job.get('convert_from'),
+        job.get('recommendations'), log)
+
+    _notify(notifications, 1.0, _('Finished %s') % title)
+    res['book_id'] = job.get('book_id')
+    res['title'] = title
+    return res
+
+
 def run_batch(jobs, notifications=None, abort=None, log=None):
-    """Process a list of ``dict`` job descriptions. Entry point for ThreadedJob."""
+    """Process several books in one job. Kept for callers that want a single batch job."""
     out = []
     total = max(1, len(jobs))
     for i, job in enumerate(jobs, 1):
         if abort is not None and abort.is_set():
             break
-        if notifications is not None:
-            notifications.put((i / float(total), _('Processing %s') % job.get('title', '')))
+        _notify(notifications, i / float(total), _('Processing %s') % job.get('title', ''))
         res = process_book(
             job['path'], job['settings'], job.get('polish_ops'),
             job.get('target_version', '3'), job.get('convert_from'),

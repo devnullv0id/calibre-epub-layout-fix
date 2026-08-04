@@ -56,20 +56,47 @@ class _BaseGui(InterfaceAction):
 
     # -- job plumbing -------------------------------------------------------------------
     def _start(self, jobs, description):
+        """Queue one job per book, the way calibre's own Convert action does.
+
+        A single batch job gives no per-book progress and cannot be cancelled selectively, so
+        each book gets its own entry in the job list and results are collected as they land.
+        """
         if not jobs:
             return
-        from calibre_plugins.epub_layout_fix.jobs import run_batch
-        job = ThreadedJob('epub_layout_fix', description, run_batch, (jobs,), {},
-                          Dispatcher(self._finished))
-        self.gui.job_manager.run_threaded_job(job)
+        from functools import partial
+
+        from calibre_plugins.epub_layout_fix.jobs import run_single
+
+        batch = {'total': len(jobs), 'results': [], 'description': description}
+        total = len(jobs)
+        for i, spec in enumerate(jobs, 1):
+            title = spec.get('title') or os.path.basename(spec['path'])
+            verb = _('Convert and fix') if spec.get('convert_from') else _('Fix layout')
+            desc = (_('%(verb)s book %(i)d of %(n)d (%(t)s)')
+                    % {'verb': verb, 'i': i, 'n': total, 't': title})
+            job = ThreadedJob('epub_layout_fix', desc, run_single, (spec,), {},
+                              Dispatcher(partial(self._one_finished, batch)))
+            self.gui.job_manager.run_threaded_job(job)
         self.gui.status_bar.show_message(description, 3000)
 
-    def _finished(self, job):
+    def _one_finished(self, batch, job):
+        """Called per book. Commits that book, and reports once the batch is complete."""
         if job.failed:
-            return self.gui.job_exception(job, dialog_title=_('Layout fix failed'))
-        results = job.result or []
-        self._commit_results(results)
-        self._report(results)
+            batch['results'].append({
+                'book_id': None, 'name': job.description, 'title': job.description,
+                'error': _('job failed - see the job details'), 'changed': False,
+                'image_pages': 0, 'svg_repaired': 0, 'cover_fixed': False, 'skipped': 0,
+                'details': [], 'ledger': [], 'problems': [],
+            })
+            self.gui.job_exception(job, dialog_title=_('Layout fix failed'), retry_func=None)
+        else:
+            result = job.result
+            if result:
+                self._commit_results([result])
+                batch['results'].append(result)
+
+        if len(batch['results']) >= batch['total']:
+            self._report(batch['results'])
 
     def _commit_results(self, results):
         """Write changed files back into the library. Runs on the GUI thread."""
