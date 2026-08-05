@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run: the job name, every stage in the Status column (*Dry run: polishing*, not *Polishing*), the
   finished state (*Dry run - discarded*, not *Finished*) and the summary. A setting left on cannot
   quietly swallow a run.
+- **Books that need work are flagged in the library** with a red pin, using calibre's own
+  marked-books mechanism. `marked:needs-fix` lists them. A report or a dry run sets the pin; a
+  real run takes it off once the book is fixed. Marks made by other plugins survive, and
+  re-running refreshes only our own label rather than accumulating stale pins. The colour is
+  normally chosen at random per label from calibre's palette, so the model's icon cache is seeded
+  with `render_pin('red')` first.
 - **A report action.** *EPUB Layout Fix - report* runs the full detection and writes nothing, then
   shows one row per book expanding to one row per page examined: action, category, image size and
   the reason it was chosen. Exports to CSV. The engine could always plan a run without performing

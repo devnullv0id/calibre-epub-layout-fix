@@ -171,6 +171,68 @@ class _BaseGui(InterfaceAction):
         if batch['done'] >= batch['total']:
             self._report(batch['results'], silent=batch.get('silent', False))
 
+    #: the text the flagged books are marked with, so they can be found with marked:needs-fix
+    MARK_LABEL = 'needs-fix'
+
+    def _flag_books(self, book_ids, label=None):
+        """Put a red pin against every book that still needs work.
+
+        Uses calibre's own marked-books mechanism, the one Extract ISBN uses, so the flag shows
+        in the row margin and ``marked:needs-fix`` finds them. Marks made by anything else are
+        left alone; only our own label is refreshed, so a second run cannot leave stale pins
+        behind or wipe another plugin's.
+
+        The colour is normally picked at random per label from calibre's palette. Seeding the
+        model's icon cache first pins it to red.
+        """
+        label = label or self.MARK_LABEL
+        db = self.gui.current_db
+        try:
+            existing = dict(db.data.marked_ids)
+        except Exception:                                      # noqa: BLE001 - no marks yet
+            existing = {}
+
+        keep = {bid: text for bid, text in existing.items() if text != label}
+        keep.update({bid: label for bid in book_ids})
+
+        try:
+            model = self.gui.library_view.model()
+            from calibre.gui2.library.models import render_pin
+            try:
+                from qt.core import QIcon
+            except ImportError:
+                from PyQt5.Qt import QIcon
+            model.marked_text_icons[label] = QIcon(render_pin('red'))
+        except Exception:                                      # noqa: BLE001 - colour is cosmetic
+            pass
+
+        try:
+            db.data.set_marked_ids(keep)
+            self.gui.library_view.model().refresh_ids(list(existing) + list(book_ids))
+        except Exception:                                      # noqa: BLE001 - never break a run
+            import traceback
+            traceback.print_exc()
+            return 0
+        return len(book_ids)
+
+    def _unflag_books(self, book_ids):
+        """Take our pin off books that no longer need it, leaving other marks alone."""
+        done = set(book_ids)
+        db = self.gui.current_db
+        try:
+            existing = dict(db.data.marked_ids)
+        except Exception:                                      # noqa: BLE001
+            return
+        keep = {b: t for b, t in existing.items()
+                if not (t == self.MARK_LABEL and b in done)}
+        if keep == existing:
+            return
+        try:
+            db.data.set_marked_ids(keep)
+            self.gui.library_view.model().refresh_ids(list(done))
+        except Exception:                                      # noqa: BLE001
+            pass
+
     @staticmethod
     def _mark_dry(job):
         """Say "discarded" rather than "Finished" once a dry-run job lands.
@@ -582,8 +644,12 @@ class ReportGui(_BaseGui):
     def _report(self, results, silent=False, kind='fix'):
         if kind != 'report':
             return _BaseGui._report(self, results, silent=silent, kind=kind)
+        need = [r['book_id'] for r in results
+                if r.get('book_id') is not None and r.get('changed') and not r.get('error')]
+        self._flag_books(need)
+
         from calibre_plugins.epub_layout_fix.report_dialog import ReportDialog
-        ReportDialog(self.gui, results).exec()
+        ReportDialog(self.gui, results, marked=self.MARK_LABEL if need else None).exec()
 
     def _commit_results(self, results):
         """A report writes nothing back; only the temporary copies need clearing up."""

@@ -262,6 +262,15 @@ category, the image size and the reason. **Export CSV** writes the lot to a file
 Useful for answering "which of these 900 books actually need work?" before letting the plugin near
 them, and for checking why a page you expected to be fixed was not.
 
+### Flagging the books that need work
+
+A report or a dry run puts a **red pin** against every book that would be changed, using calibre's
+own marked-books mechanism, the same one Extract ISBN uses. The pin shows in the row margin and
+`marked:needs-fix` in the search bar lists only those books.
+
+The pin comes off by itself once a real run has fixed the book. Marks made by anything else are
+left alone, and re-running does not leave stale pins behind: only our own label is refreshed.
+
 ## Undo
 
 Every modified book gets an `ORIGINAL_EPUB` format, created with the same calibre call the Polish

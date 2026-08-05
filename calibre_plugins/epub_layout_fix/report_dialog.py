@@ -33,7 +33,7 @@ def would_change(result):
 class ReportDialog(QDialog):
     """One row per book, expanding to one row per page examined."""
 
-    def __init__(self, parent, results):
+    def __init__(self, parent, results, marked=None):
         QDialog.__init__(self, parent)
         self.setWindowTitle(_('What would change'))
         self.results = results
@@ -42,9 +42,13 @@ class ReportDialog(QDialog):
 
         needing = [r for r in results if would_change(r) and not r.get('error')]
         failed = [r for r in results if r.get('error')]
-        head = QLabel(_('<b>%(n)d of %(t)d book(s) would be changed.</b> Nothing has been '
-                        'written - this is a report only.')
-                      % {'n': len(needing), 't': len(results)})
+        text = _('<b>%(n)d of %(t)d book(s) would be changed.</b> Nothing has been written - '
+                 'this is a report only.') % {'n': len(needing), 't': len(results)}
+        if marked and needing:
+            text += _('<br/>They now carry a red pin in the library. Search '
+                      '<code>marked:%s</code> to list only those; the pin comes off once a real '
+                      'run has fixed the book.') % marked
+        head = QLabel(text)
         head.setWordWrap(True)
         outer.addWidget(head)
 

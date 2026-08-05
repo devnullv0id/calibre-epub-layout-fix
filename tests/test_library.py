@@ -397,6 +397,51 @@ def check_dry_run(legacy_db, tmp):
           'a real run does write, so the dry run was the only thing holding it back')
 
 
+def check_flagging(legacy_db, tmp):
+    """Books that still need work get calibre's marked pin; fixing one takes it off again."""
+    print('\n=== flagging books that need work ===')
+    from calibre.ebooks.metadata.book.base import Metadata
+    from calibre_plugins.epub_layout_fix import ui
+
+    db = legacy_db.new_api
+    gui = FakeGui(legacy_db)
+    act = ui.FixLayoutQuickGui(gui, None)
+    act.gui = gui
+
+    a = db.add_books([(Metadata('Flag A', ['X']),
+                       {'EPUB': make_broken_epub(os.path.join(tmp, 'fa.epub'))})],
+                     add_duplicates=True)[0][0]
+    b = db.add_books([(Metadata('Flag B', ['X']),
+                       {'EPUB': make_broken_epub(os.path.join(tmp, 'fb.epub'))})],
+                     add_duplicates=True)[0][0]
+
+    # something else already marked a book: that mark must survive untouched
+    legacy_db.data.set_marked_ids({b: 'someone-elses-mark'})
+
+    n = act._flag_books([a])
+    marks = dict(legacy_db.data.marked_ids)
+    check('flag', n == 1 and marks.get(a) == act.MARK_LABEL,
+          'the book that needs work is marked %r' % marks.get(a))
+    check('flag', marks.get(b) == 'someone-elses-mark',
+          "another plugin's mark is left alone: %r" % marks.get(b))
+
+    # a second report must not accumulate stale pins
+    n = act._flag_books([b])
+    marks = dict(legacy_db.data.marked_ids)
+    check('flag', act.MARK_LABEL not in [marks.get(a)],
+          'a book that no longer needs work loses our pin (%r)' % marks.get(a))
+    check('flag', marks.get(b) == act.MARK_LABEL, 'and the newly failing one gains it')
+
+    # fixing a book clears it
+    act._unflag_books([b])
+    marks = dict(legacy_db.data.marked_ids)
+    check('flag', marks.get(b) != act.MARK_LABEL,
+          'a real run takes the pin off: %r' % marks.get(b))
+
+    check('flag', act.MARK_LABEL == 'needs-fix',
+          'the label is searchable as marked:needs-fix')
+
+
 def check_import_watcher(db, make_epub, tmp):
     """The automatic run must fire on a real import - and exactly once per book.
 
@@ -558,6 +603,9 @@ def main():
 
         # --- a dry run must do the work and keep none of it -----------------------------
         check_dry_run(ldb, tmp)
+
+        # --- flagging books that need work ----------------------------------------------
+        check_flagging(ldb, tmp)
 
         # --- the automatic run on import -----------------------------------------------
         check_import_watcher(db, make_broken_epub, tmp)
