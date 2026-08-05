@@ -20,6 +20,10 @@ prefs.defaults['polish_ops'] = {}          # empty -> seeded from calibre's own 
 #: rewrites every document, so a book needing no repair still comes out "changed".
 prefs.defaults['beautify'] = False
 
+#: Process the book for real, then throw the result away instead of saving it. Not an engine
+#: setting - the engine always does the same work; this only decides whether it is kept.
+prefs.defaults['dry_run'] = False
+
 #: Automatic runs on import. Off by default: this plugin rewrites books, and nothing should start
 #: doing that to a library without being asked.
 prefs.defaults['auto_on_import'] = False
@@ -66,6 +70,10 @@ def polish_settings(automatic=False):
 
 def beautify_enabled():
     return bool(prefs.get('beautify', False))
+
+
+def dry_run_enabled():
+    return bool(prefs.get('dry_run', False))
 
 
 def auto_settings():

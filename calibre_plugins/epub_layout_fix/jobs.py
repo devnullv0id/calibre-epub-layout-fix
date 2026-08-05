@@ -126,7 +126,7 @@ def convert_to_epub(src_path, dest_path, recommendations=None, log=None, target_
 
 def process_book(path, settings, polish_ops=None, target_version='3',
                  convert_from=None, recommendations=None, log=None, progress=None,
-                 beautify=False):
+                 beautify=False, prefix=''):
     """The whole pipeline for one file: convert -> polish -> upgrade -> beautify -> fix.
 
     ``progress(fraction, message)`` is called as each stage starts, so the job list shows what
@@ -135,8 +135,9 @@ def process_book(path, settings, polish_ops=None, target_version='3',
     Returns a plain dict so it crosses the job boundary cleanly.
     """
     def step(frac, msg):
+        # the prefix is what stops a dry run's job status reading exactly like a real one
         if progress is not None:
-            progress(frac, msg)
+            progress(frac, (prefix + msg) if prefix else msg)
 
     steps = []
     try:
@@ -170,7 +171,7 @@ def process_book(path, settings, polish_ops=None, target_version='3',
         result = fixer.fix_epub(path, settings)
         steps.append(('fix', not result.error and not result.problems,
                       result.error or '; '.join(result.problems)))
-        step(1.0, _('Done'))
+        step(1.0, _('nothing saved') if prefix else _('Done'))
         return _as_dict(path, steps, result, result.error)
     except Exception:                                          # noqa: BLE001
         return _as_dict(path, steps, None, traceback.format_exc())
@@ -239,8 +240,9 @@ def run_single(job, notifications=None, abort=None, log=None):
     can be cancelled individually, instead of a single opaque batch job.
     """
     title = job.get('title') or os.path.basename(job['path'])
+    prefix = _('Dry run: ') if job.get('dry_run') else ''
 
-    _notify(notifications, 0.01, _('Starting'))
+    _notify(notifications, 0.01, prefix + _('Starting'))
     if abort is not None and abort.is_set():
         return _as_dict(job['path'], [], None, 'cancelled')
 
@@ -251,8 +253,10 @@ def run_single(job, notifications=None, abort=None, log=None):
         job['path'], job['settings'], job.get('polish_ops'),
         job.get('target_version', '3'), job.get('convert_from'),
         job.get('recommendations'), log, progress=progress,
-        beautify=job.get('beautify', False))
+        beautify=job.get('beautify', False), prefix=prefix)
 
     res['book_id'] = job.get('book_id')
     res['title'] = title
+    # carried back so the GUI knows not to write this one anywhere
+    res['dry_run'] = bool(job.get('dry_run'))
     return res

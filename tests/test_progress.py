@@ -76,6 +76,22 @@ def main():
         check('convert', not res2['error'], 'conversion job ok: %s' % (res2['error'] or 'yes'))
         check('convert', any('Converting' in m for m in msgs2),
               'reports the conversion stage: %s' % msgs2)
+
+        # A dry run must not look like a real one in the job list. calibre shows the last
+        # progress message as the job's Status, so every stage has to say so.
+        q3 = FakeQueue()
+        book3 = os.path.join(tmp, 'dry.epub')
+        shutil.copy(book, book3)
+        jobs.run_single({'path': book3, 'title': 'Dry', 'settings': current_settings(),
+                         'polish_ops': {'upgrade_book': True}, 'target_version': '3',
+                         'dry_run': True}, notifications=q3)
+        msgs3 = [m for _f, m in q3.items]
+        check('dry', all(m.startswith('Dry run:') for m in msgs3),
+              'every status says it is a dry run: %s' % msgs3)
+        check('dry', 'nothing saved' in msgs3[-1],
+              'and the last one says nothing was kept: %r' % msgs3[-1])
+        check('dry', not any(m == 'Done' for m in msgs3),
+              'never the same "Done" a real run ends on')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

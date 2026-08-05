@@ -169,6 +169,7 @@ added to the library. It is off by default. Before turning it on:
 | Target EPUB version | EPUB 3 | EPUB 3 upgrades book internals first; EPUB 2 leaves the version alone |
 | Polish | calibre's own settings | calibre's polish operations, run before the layout fixes |
 | Beautify all files | off | Pretty-print the book's source, cosmetic only, see below |
+| Dry run | off | Do all the work, then discard the result instead of saving it |
 | Fix books automatically | off | Repair books as they are added to the library |
 | Convert other formats | on | Automatic runs convert non-EPUB books, keeping the original format |
 | Wait for the import to finish | 3 s | How long to collect an import before starting one batch |
@@ -233,6 +234,24 @@ Every image-bearing page that is not rewritten is recorded with a reason:
 | `too-narrow` | Displayed below the threshold, so probably a deliberate ornament |
 | `unreadable-image` | Image format whose dimensions could not be read |
 | `already-svg-ok` | Already a correct SVG page object |
+
+### Dry run
+
+**Dry run** in the Layout fixes panel does the entire job - convert, polish, upgrade, beautify,
+repair, verify - on a temporary copy, and then throws the result away instead of writing it back.
+Your library is untouched and no `ORIGINAL_EPUB` backup is made.
+
+It says so everywhere it could otherwise be mistaken for a real run: the job is named
+*Dry run: fix layout ...*, each stage in the Status column reads *Dry run: polishing* rather than
+*Polishing*, a finished job says *Dry run - discarded* instead of *Finished*, and the summary opens
+with `DRY RUN - nothing was written`. A sticky setting that silently swallowed your changes would
+be a nasty surprise.
+There is also **Fix layout (dry run)** in the main action's menu, which does one dry run without
+touching the stored setting.
+
+This is not the same as the report action below. A dry run answers "what would a real run
+produce?", including everything polish and the EPUB 3 upgrade change on the way. The report only
+looks at the EPUB as it is now.
 
 ### Reporting without changing anything
 

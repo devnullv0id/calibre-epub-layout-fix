@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A dry run.** Runs the whole pipeline on a temporary copy and discards the result instead of
+  saving it: nothing in the library changes and no `ORIGINAL_EPUB` backup is made. Unlike the
+  report action it says what a real run would *produce*, since polish, the EPUB 3 upgrade and
+  beautify all happen first. Available as a setting, and as *Fix layout (dry run)* in the menu for
+  a one-off that leaves the setting alone. It says so everywhere it could be mistaken for a real
+  run: the job name, every stage in the Status column (*Dry run: polishing*, not *Polishing*), the
+  finished state (*Dry run - discarded*, not *Finished*) and the summary. A setting left on cannot
+  quietly swallow a run.
 - **A report action.** *EPUB Layout Fix - report* runs the full detection and writes nothing, then
   shows one row per book expanding to one row per page examined: action, category, image size and
   the reason it was chosen. Exports to CSV. The engine could always plan a run without performing

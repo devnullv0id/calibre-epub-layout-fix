@@ -96,7 +96,8 @@ class LayoutFixWidget(_PluginWidget):
     HELP = _('Repair full-page images and covers so they fit the screen')
 
     KEYS = ('fix_images', 'min_width_percent', 'fix_covers', 'dark_cover', 'cover_color',
-            'preserve_anchors', 'fix_captioned', 'fix_multi_image', 'target_epub_version')
+            'preserve_anchors', 'fix_captioned', 'fix_multi_image', 'target_epub_version',
+            'dry_run')
 
     def build(self):
         layout = QVBoxLayout(self)
@@ -178,6 +179,16 @@ class LayoutFixWidget(_PluginWidget):
             'internals" step. Choose EPUB 2 to leave the book at its current version; the '
             'EPUB 3-only properties="svg" manifest attribute is then not written.'))
         oform.addRow(_('Target EPUB version:'), self.epub_version)
+
+        self.dry_run = QCheckBox(_('Dry run: do all the work, then throw the result away'))
+        self.dry_run.setToolTip(_(
+            'The book is converted, polished and repaired exactly as it would be, and the result '
+            'is then discarded instead of being saved. Nothing in your library changes and no '
+            'ORIGINAL_EPUB backup is made.\n\n'
+            'Unlike the Report action, this runs the whole pipeline, so it says what a real run '
+            'would produce rather than only what the current EPUB looks like.\n\n'
+            'This setting sticks until you turn it off. Every job and the summary say so.'))
+        oform.addRow(self.dry_run)
         layout.addWidget(out)
 
         note = QLabel(_(
@@ -206,6 +217,7 @@ class LayoutFixWidget(_PluginWidget):
         self.fix_covers.setChecked(bool(prefs['fix_covers']))
         self.dark_cover.setChecked(bool(prefs['dark_cover']))
         self.cover_color.setText(str(prefs['cover_color']))
+        self.dry_run.setChecked(bool(prefs.get('dry_run', False)))
         want = str(prefs.get('target_epub_version', '3'))
         idx = self.epub_version.findData(want)
         self.epub_version.setCurrentIndex(idx if idx >= 0 else 0)
@@ -222,6 +234,7 @@ class LayoutFixWidget(_PluginWidget):
         colour = (self.cover_color.text() or '').strip()
         prefs['cover_color'] = colour if re.match(r'^#[0-9A-Fa-f]{6}$', colour) else '#000000'
         prefs['target_epub_version'] = self.epub_version.currentData() or '3'
+        prefs['dry_run'] = self.dry_run.isChecked()
 
 
 #: Labels for calibre's polish operations. The *set* of operations comes from calibre at runtime

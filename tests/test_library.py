@@ -335,6 +335,68 @@ def check_action_end_to_end(legacy_db, book_id, tmp):
                 prefs[k] = v
 
 
+def check_dry_run(legacy_db, tmp):
+    """A dry run runs the whole pipeline and leaves the library untouched.
+
+    The distinction that matters: the work really happens, and really is verified, on the
+    temporary copy. Only the write-back is skipped. So a dry run tells you what a real run would
+    produce, which analysing the existing EPUB cannot.
+    """
+    print('\n=== dry run ===')
+    from calibre.ebooks.metadata.book.base import Metadata
+    from calibre_plugins.epub_layout_fix import jobs, ui
+
+    db = legacy_db.new_api
+    gui = FakeGui(legacy_db)
+    act = ui.FixLayoutQuickGui(gui, None)
+    act.gui = gui
+    act._report = lambda results, silent=False: None
+
+    book_id = db.add_books([(Metadata('Dry Run Book', ['Nobody']),
+                             {'EPUB': make_broken_epub(os.path.join(tmp, 'dry.epub'))})],
+                           add_duplicates=True)[0][0]
+    before = os.path.getsize(os.path.join(tmp, 'dry-before.epub')) if False else None
+    out = os.path.join(tmp, 'dry-before.epub')
+    db.copy_format_to(book_id, 'EPUB', out)
+    with zipfile.ZipFile(out) as z:
+        original = z.read('p1.xhtml').decode()
+    check('dry', '<svg' not in original, 'the library copy starts unfixed')
+
+    act.dry_run = True
+    specs, _missing = act._epub_jobs([book_id])
+    check('dry', specs and specs[0].get('dry_run') is True,
+          'the flag reaches the job spec')
+
+    result = jobs.run_single(specs[0])
+    check('dry', not result['error'] and result['changed'],
+          'the pipeline really ran: %s' % (result['error'] or 'changed'))
+    check('dry', result['image_pages'] >= 1, 'and really did the work (%d image page(s))'
+          % result['image_pages'])
+    check('dry', result['dry_run'] is True, 'the result is marked as a dry run')
+
+    act._commit_results([result])
+    fmts = {f.upper() for f in db.formats(book_id)}
+    check('dry', 'ORIGINAL_EPUB' not in fmts, 'no backup was made (%s)' % sorted(fmts))
+    check('dry', not os.path.exists(specs[0]['path']), 'the temporary copy was cleaned up')
+
+    after = os.path.join(tmp, 'dry-after.epub')
+    db.copy_format_to(book_id, 'EPUB', after)
+    with zipfile.ZipFile(after) as z:
+        still = z.read('p1.xhtml').decode()
+    check('dry', still == original, 'the library copy is byte-identical afterwards')
+    check('dry', not gui.library_view.model().refreshed,
+          'nothing was refreshed, because nothing changed')
+
+    # and with the flag off, the same book does get written
+    act.dry_run = False
+    specs, _missing = act._epub_jobs([book_id])
+    check('dry', specs[0].get('dry_run') is False, 'the flag is off again')
+    result = jobs.run_single(specs[0])
+    act._commit_results([result])
+    check('dry', 'ORIGINAL_EPUB' in {f.upper() for f in db.formats(book_id)},
+          'a real run does write, so the dry run was the only thing holding it back')
+
+
 def check_import_watcher(db, make_epub, tmp):
     """The automatic run must fire on a real import - and exactly once per book.
 
@@ -493,6 +555,9 @@ def main():
               {'EPUB': make_broken_epub(os.path.join(tmp, 'broken3.epub'))})],
             add_duplicates=True)[0][0]
         check_action_end_to_end(ldb, third, tmp)
+
+        # --- a dry run must do the work and keep none of it -----------------------------
+        check_dry_run(ldb, tmp)
 
         # --- the automatic run on import -----------------------------------------------
         check_import_watcher(db, make_broken_epub, tmp)

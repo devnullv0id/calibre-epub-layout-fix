@@ -20,7 +20,8 @@ from calibre.gui2.threaded_jobs import ThreadedJob
 from calibre.ptempfile import PersistentTemporaryFile
 
 from calibre_plugins.epub_layout_fix.config import (auto_settings, beautify_enabled,
-                                                    current_settings, polish_settings,
+                                                    current_settings, dry_run_enabled,
+                                                    polish_settings,
                                                     target_epub_version)
 
 __license__ = 'GPL v3'
@@ -90,6 +91,9 @@ class _BaseGui(InterfaceAction):
     action_type = 'current'
     dont_add_to = frozenset()
 
+    #: None means "use the stored setting"; True/False force it for one run
+    dry_run = None
+
     def genesis(self):
         self.qaction.triggered.connect(self.run)
 
@@ -133,6 +137,8 @@ class _BaseGui(InterfaceAction):
         for i, spec in enumerate(jobs, 1):
             title = spec.get('title') or os.path.basename(spec['path'])
             verb = _('Convert and fix') if spec.get('convert_from') else _('Fix layout')
+            if spec.get('dry_run'):
+                verb = _('Dry run:') + ' ' + verb.lower()
             desc = (_('%(verb)s book %(i)d of %(n)d (%(t)s)')
                     % {'verb': verb, 'i': i, 'n': total, 't': title})
             job = ThreadedJob('epub_layout_fix', desc, run_single, (spec,), {},
@@ -156,12 +162,28 @@ class _BaseGui(InterfaceAction):
             if result:
                 self._commit_results([result])
                 batch['results'].append(result)
+                if result.get('dry_run'):
+                    self._mark_dry(job)
 
         # Count completions, not results: a job that returns nothing still finished, and counting
         # results would leave the batch permanently one short and never report.
         batch['done'] += 1
         if batch['done'] >= batch['total']:
             self._report(batch['results'], silent=batch.get('silent', False))
+
+    @staticmethod
+    def _mark_dry(job):
+        """Say "discarded" rather than "Finished" once a dry-run job lands.
+
+        ``BaseJob.status_text`` returns ``_message`` while a job runs - which the progress
+        notifications set, so the stages already read "Dry run: polishing" - but switches to
+        ``_status_text`` on completion, and calibre puts "Finished" there. A finished dry run
+        claiming to be finished is the confusing half, so the text is replaced.
+        """
+        try:
+            job._status_text = _('Dry run - discarded')
+        except Exception:                                      # noqa: BLE001 - cosmetic only
+            pass
 
     def _watcher(self):
         """The import watcher, which lives on the main action. May be None."""
@@ -182,6 +204,9 @@ class _BaseGui(InterfaceAction):
             book_id = r.get('book_id')
             try:
                 if book_id is None or r.get('error') or not r.get('changed'):
+                    continue
+                if r.get('dry_run'):
+                    # the work was done and verified; it just does not get to stay
                     continue
                 try:
                     # same call calibre's own Polish action makes, so its Restore original works
@@ -224,7 +249,13 @@ class _BaseGui(InterfaceAction):
         covers = sum(1 for r in results if r.get('cover_fixed'))
         dead = sum(r.get('dead_links', 0) for r in results)
 
-        lines = [
+        dry = [r for r in results if r.get('dry_run')]
+        lines = []
+        if dry:
+            lines.append(_('DRY RUN - nothing was written. %d of %d book(s) would have changed.')
+                         % (len(changed), len(results)))
+            lines.append('')
+        lines += [
             _('Books processed: %d') % len(results),
             _('Books changed: %d') % len(changed),
             _('Full-page images rewritten: %d') % images,
@@ -296,6 +327,7 @@ class _BaseGui(InterfaceAction):
         settings = current_settings()
         polish_on, polish_ops = polish_settings(automatic=automatic)
         beautify = beautify_enabled()
+        dry_run = self.dry_run if self.dry_run is not None else dry_run_enabled()
         recs = list(recs)
         for book_id in book_ids:
             fmts = {f.upper() for f in (db.formats(book_id) or ())}
@@ -319,6 +351,7 @@ class _BaseGui(InterfaceAction):
                 'polish_ops': polish_ops if polish_on else None,
                 'target_version': target_epub_version(),
                 'beautify': beautify,
+                'dry_run': dry_run,
             })
         return jobs
 
@@ -329,6 +362,7 @@ class _BaseGui(InterfaceAction):
         settings = current_settings()
         polish_on, polish_ops = polish_settings(automatic=automatic)
         beautify = beautify_enabled()
+        dry_run = self.dry_run if self.dry_run is not None else dry_run_enabled()
         for book_id in book_ids:
             fmts = {f.upper() for f in (db.formats(book_id) or ())}
             if 'EPUB' not in fmts:
@@ -345,6 +379,7 @@ class _BaseGui(InterfaceAction):
                 'polish_ops': polish_ops if polish_on else None,
                 'target_version': target_epub_version(),
                 'beautify': beautify,
+                'dry_run': dry_run,
             })
         return jobs, missing
 
@@ -388,6 +423,8 @@ class FixLayoutGui(_BaseGui):
                                 icon=ICON, triggered=self.run_quick)
         self.create_menu_action(m, 'eplf_convert', _('Convert to EPUB and fix...'),
                                 icon=ICON, triggered=self.run_convert)
+        self.create_menu_action(m, 'eplf_fix_dry', _('Fix layout (dry run)'),
+                                icon=ICON, triggered=self.run_dry)
         m.addSeparator()
         self.create_menu_action(m, 'eplf_settings', _('Settings...'),
                                 icon='config.png', triggered=self.show_settings)
@@ -426,6 +463,21 @@ class FixLayoutGui(_BaseGui):
             return
         jobs, _missing = self._epub_jobs(ids)
         self._start(jobs, _('Fixing layout of %d book(s)') % len(jobs))
+
+    def run_dry(self):
+        """One dry run, whatever the stored setting says, and without changing it."""
+        ids = self._require_selection()
+        if not ids:
+            return
+        previous, self.dry_run = self.dry_run, True
+        try:
+            jobs, _missing = self._epub_jobs(ids)
+        finally:
+            self.dry_run = previous
+        if not jobs:
+            return error_dialog(self.gui, _('No EPUB'),
+                                _('None of the selected books has an EPUB format.'), show=True)
+        self._start(jobs, _('Dry run over %d book(s)') % len(jobs))
 
     def run_convert(self):
         act = self.gui.iactions.get('EPUB Layout Fix - convert and fix')
