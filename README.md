@@ -128,6 +128,13 @@ Three actions are contributed, each placeable independently:
 The conversion window is calibre's real one — Metadata, Look & feel, Page setup and the rest are
 unchanged — with two extra categories in the left-hand list.
 
+Selecting **more than one book** opens calibre's *Bulk convert N books* window instead, the same
+way calibre's own Convert action chooses between them. That window deliberately drops the
+categories that only make sense for a single book — Metadata, Debug and the input format — and adds
+**Use saved conversion settings for individual books**. With that ticked, each book's own saved
+conversion settings are used for anything the bulk window cannot specify, and the window's settings
+are layered on top. The plugin reads those saved settings but never rewrites them.
+
 ### Fixing books automatically as they arrive
 
 **Preferences → Plugins → Customize → Automatic** turns on a listener that repairs books as they

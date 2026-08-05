@@ -41,6 +41,48 @@ def pick_source(fmts, preferred=None):
     return next(iter(fmts)) if fmts else None
 
 
+def bulk_recommendations(db, dialog):
+    """-> ``f(book_id, src_fmt)`` giving that book's conversion recommendations.
+
+    The bulk window carries one set of options for the whole selection plus a "use saved
+    conversion settings for individual books" checkbox, so the options are not the same for every
+    book. The layering matches ``calibre.gui2.tools.QueueBulk.do_book``: the input format's own
+    bulk defaults first, then the book's saved settings when the box is ticked, then the window's
+    settings on top.
+
+    Unlike calibre, this does not call ``save_specifics`` afterwards - the plugin reads the
+    conversion settings stored for a book, it does not rewrite them.
+    """
+    from calibre.ebooks.conversion.config import GuiRecommendations, load_specifics
+    from calibre.gui2.convert import bulk_defaults_for_input_format
+
+    # Config.recommendations is a list of (name, value, level) triples, not a mapping
+    window_recs = {r[0]: r[1] for r in (getattr(dialog, 'recommendations', None) or ())}
+    try:
+        use_saved = bool(dialog.opt_individual_saved_settings.isChecked())
+    except Exception:                                          # noqa: BLE001 - checkbox hidden
+        use_saved = False
+
+    def recommendations_for(book_id, src_fmt):
+        combined = GuiRecommendations()
+        try:
+            combined.update(bulk_defaults_for_input_format((src_fmt or '').lower()))
+        except Exception:                                      # noqa: BLE001 - unknown input
+            pass
+        if use_saved:
+            try:
+                combined.update(load_specifics(db, book_id) or {})
+            except Exception:                                  # noqa: BLE001 - nothing saved
+                pass
+        combined.update(window_recs)
+        # LOW is what calibre's own bulk path uses; the recommendations the plugin forces
+        # afterwards - the metadata OPF, preserve_cover_aspect_ratio, epub_version - are HIGH and
+        # still win.
+        return list(combined.to_recommendations())
+
+    return recommendations_for
+
+
 class _BaseGui(InterfaceAction):
     """Shared selection handling, job dispatch and result reporting."""
 
@@ -238,8 +280,13 @@ class _BaseGui(InterfaceAction):
             return []
         return [('read_metadata_from_opf', opf.name, OptionRecommendation.HIGH)]
 
-    def _convert_jobs(self, book_ids, recs=(), preferred=None, automatic=False):
-        """One job per book that has something convertible. The source format is left in place."""
+    def _convert_jobs(self, book_ids, recs=(), preferred=None, automatic=False, recs_for=None):
+        """One job per book that has something convertible. The source format is left in place.
+
+        ``recs_for(book_id, src_fmt)`` supplies per-book recommendations and takes precedence over
+        ``recs``; the bulk window needs it because "use saved conversion settings for individual
+        books" means the options genuinely differ from one book to the next.
+        """
         db = self._db()
         jobs = []
         settings = current_settings()
@@ -255,13 +302,14 @@ class _BaseGui(InterfaceAction):
             db.copy_format_to(book_id, src_fmt, src.name)
             out = PersistentTemporaryFile('.epub')
             out.close()
+            book_recs = recs_for(book_id, src_fmt) if recs_for is not None else recs
             jobs.append({
                 'book_id': book_id,
                 'title': db.field_for('title', book_id),
                 'path': out.name,
                 'convert_from': src.name,
                 # the metadata recommendation goes last so it wins over the dialog's
-                'recommendations': recs + self._metadata_recommendations(book_id),
+                'recommendations': list(book_recs) + self._metadata_recommendations(book_id),
                 'settings': settings,
                 'polish_ops': polish_ops if polish_on else None,
                 'target_version': target_epub_version(),
@@ -409,10 +457,19 @@ class ConvertAndFixGui(_BaseGui):
         ids = self._require_selection()
         if not ids:
             return
+        bulk = len(ids) > 1
 
+        # One book gets calibre's Convert window, several get its Bulk convert window - the same
+        # choice calibre makes. The bulk window deliberately drops the per-book categories
+        # (Metadata, Debug, input format), which the single window would otherwise have applied
+        # to books they were never filled in for.
         try:
-            from calibre_plugins.epub_layout_fix.dialog import make_convert_dialog
-            d = make_convert_dialog(self.gui, self.gui.current_db, ids[0])
+            from calibre_plugins.epub_layout_fix.dialog import (make_bulk_convert_dialog,
+                                                                make_convert_dialog)
+            if bulk:
+                d = make_bulk_convert_dialog(self.gui, self.gui.current_db, ids)
+            else:
+                d = make_convert_dialog(self.gui, self.gui.current_db, ids[0])
         except Exception as e:                                 # noqa: BLE001
             return error_dialog(
                 self.gui, _('Conversion window unavailable'),
@@ -423,9 +480,13 @@ class ConvertAndFixGui(_BaseGui):
 
         if not d.exec():
             return
-        recs = list(getattr(d, 'recommendations', []) or [])
 
-        jobs = self._convert_jobs(ids, recs, getattr(d, 'input_format', None))
+        if bulk:
+            jobs = self._convert_jobs(
+                ids, recs_for=bulk_recommendations(self.gui.current_db, d))
+        else:
+            recs = list(getattr(d, 'recommendations', []) or [])
+            jobs = self._convert_jobs(ids, recs, getattr(d, 'input_format', None))
         if not jobs:
             return error_dialog(self.gui, _('Nothing to convert'),
                                 _('None of the selected books has a convertible format.'),

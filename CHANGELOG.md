@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The bulk conversion window when more than one book is selected.** *Convert to EPUB and fix…*
+  always opened calibre's single-book window, built for the first selected book, and then applied
+  those settings to all of them — including Metadata and a Search & replace written against one
+  book's text. It now picks the window the way calibre does: one book gets *Convert*, several get
+  *Bulk convert N books*, which drops the categories that cannot be shared and adds **Use saved
+  conversion settings for individual books**. That checkbox is honoured, layered the way calibre's
+  own bulk convert layers it — the input format's bulk defaults, then the book's saved settings,
+  then the window's settings on top — but the plugin never writes those saved settings back.
+
 - **Fix books automatically as they are added to the library**, off by default, configured under
   *Preferences → Plugins → Customize → Automatic*. It hooks calibre's database event stream rather
   than the *Add books* action, so drag and drop, the content server, a connected device and a

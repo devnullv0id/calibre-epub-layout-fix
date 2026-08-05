@@ -100,6 +100,107 @@ def check_convert_dialog(legacy_db, book_id):
     d.break_cycles()
 
 
+def check_bulk_convert_dialog(legacy_db, book_ids):
+    """Selecting several books must give calibre's Bulk convert window, not the single-book one.
+
+    The difference is not cosmetic: the single-book window carries Metadata and a Search & replace
+    written against one book's text, which were being applied to every selected book.
+    """
+    from calibre_plugins.epub_layout_fix.dialog import make_bulk_convert_dialog
+    from calibre_plugins.epub_layout_fix.panel import LayoutFixWidget, PolishWidget
+    from calibre_plugins.epub_layout_fix.ui import bulk_recommendations
+
+    try:
+        from qt.core import QApplication, QWidget
+    except ImportError:
+        from PyQt5.Qt import QApplication, QWidget
+    from calibre.gui2 import Application
+    QApplication.instance() or Application(sys.argv[:1])
+
+    parent = QWidget()
+    d = make_bulk_convert_dialog(parent, legacy_db, book_ids)
+
+    title = d.windowTitle()
+    check('bulk', str(len(book_ids)) in title and 'ulk' in title,
+          'window is the bulk one: %r' % title)
+
+    titles = [w.TITLE.replace('\n', ' ') for w in d.widgets]
+    check('bulk', sum(isinstance(w, (LayoutFixWidget, PolishWidget)) for w in d.widgets) == 2,
+          'exactly one of each plugin panel (%s)' % ', '.join(titles))
+    # the point of the bulk window: no per-book categories
+    check('bulk', not any(t.startswith('Metadata') for t in titles),
+          'no Metadata category, which cannot be shared across books')
+
+    fmts = [d.output_formats.itemText(i) for i in range(d.output_formats.count())]
+    check('bulk', fmts == ['EPUB'], 'output format restricted to EPUB (got %r)' % fmts)
+    check('bulk', not d.output_formats.isEnabled(), 'output format combo disabled')
+
+    seen = []
+    for row in range(d._groups_model.rowCount()):
+        d.groups.setCurrentIndex(d._groups_model.index(row))
+        d.show_pane(d._groups_model.index(row))
+        seen.append(d.scrollArea.widget() is d.widgets[row])
+    check('bulk', all(seen), 'selecting each category shows its pane (%d/%d correct)'
+          % (sum(seen), len(seen)))
+
+    # BulkConfig.accept() iterates _groups_model.widgets and does recs.update(w.commit(...)),
+    # so every panel in the model must return a mapping
+    for w in d._groups_model.widgets:
+        got = w.commit(save_defaults=False)
+        check('bulk', hasattr(got, 'keys'),
+              '%s.commit() returns a mapping, not %s' % (w.TITLE.replace('\n', ' '),
+                                                         type(got).__name__))
+    try:
+        d.accept()
+        check('bulk', True, 'accept() completes without raising')
+    except Exception as e:                                     # noqa: BLE001
+        check('bulk', False, 'accept() raised %s: %s' % (type(e).__name__, e))
+
+    d.setup_pipeline()
+    n = sum(isinstance(w, (LayoutFixWidget, PolishWidget)) for w in d.widgets)
+    check('bulk', n == 2, 'panels not duplicated after setup_pipeline re-runs (found %d)' % n)
+
+    # --- per-book recommendations honour the saved-settings checkbox ---
+    # The checkbox promises, in calibre's own words, that "for settings that cannot be specified
+    # in this dialog" the values saved for that book are used. So the marker has to be an option
+    # the bulk window does not carry - debug_pipeline, since there is no Debug category here -
+    # and an option it does carry must come from the window instead.
+    from calibre.ebooks.conversion.config import GuiRecommendations, save_specifics
+
+    marker = GuiRecommendations()
+    marker['debug_pipeline'] = '/tmp/eplf-debug-marker'
+    marker['change_justification'] = 'center'
+    save_specifics(legacy_db, book_ids[0], marker)
+
+    d.opt_individual_saved_settings.setChecked(True)
+    recs_for = bulk_recommendations(legacy_db, d)
+    got = recs_for(book_ids[0], 'EPUB')
+    as_dict = {r[0]: r[1] for r in got}
+    check('bulk', all(isinstance(r, tuple) and len(r) == 3 for r in got),
+          'recommendations are (name, value, level) triples (%d of them)' % len(got))
+    check('bulk', as_dict.get('debug_pipeline') == '/tmp/eplf-debug-marker',
+          "a setting the window cannot specify comes from the book's saved settings")
+
+    window = {r[0]: r[1] for r in (d.recommendations or ())}
+    shared = [k for k in ('change_justification',) if k in window]
+    check('bulk', all(as_dict.get(k) == window[k] for k in shared),
+          'a setting the window does carry comes from the window, not the book (%s)'
+          % ', '.join('%s=%r' % (k, as_dict.get(k)) for k in shared))
+
+    other = recs_for(book_ids[1], 'EPUB') if len(book_ids) > 1 else []
+    check('bulk', not any(r[0] == 'debug_pipeline' and r[1] == marker['debug_pipeline']
+                          for r in other),
+          "another book does not inherit the first book's saved setting")
+
+    d.opt_individual_saved_settings.setChecked(False)
+    off = bulk_recommendations(legacy_db, d)(book_ids[0], 'EPUB')
+    check('bulk', not any(r[0] == 'debug_pipeline' and r[1] == marker['debug_pipeline']
+                          for r in off),
+          'unticking the checkbox drops the saved settings')
+
+    d.break_cycles()
+
+
 def check_import_watcher(db, make_epub, tmp):
     """The automatic run must fire on a real import - and exactly once per book.
 
@@ -243,8 +344,14 @@ def main():
         check('result', i0.filename == 'mimetype' and i0.compress_type == 0
               and z.testzip() is None, 'archive sound in the library')
 
-        # --- the combined conversion window --------------------------------------------
+        # --- the combined conversion windows, single and bulk ---------------------------
         check_convert_dialog(ldb, book_id)
+
+        second = db.add_books(
+            [(Metadata('Second Book', ['Test Author']),
+              {'EPUB': make_broken_epub(os.path.join(tmp, 'broken2.epub'))})],
+            add_duplicates=True)[0][0]
+        check_bulk_convert_dialog(ldb, [book_id, second])
 
         # --- the automatic run on import -----------------------------------------------
         check_import_watcher(db, make_broken_epub, tmp)
