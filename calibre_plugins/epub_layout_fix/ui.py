@@ -188,8 +188,10 @@ class _BaseGui(InterfaceAction):
         left alone; only our own label is refreshed, so a second run cannot leave stale pins
         behind or wipe another plugin's.
 
-        The colour is normally picked at random per label from calibre's palette. Seeding the
-        model's icon cache first pins it to red.
+        The colour is normally picked per label from calibre's palette. Seeding the model's icon
+        cache first pins it to red. The cache holds ``(colour, QIcon)`` pairs, not bare icons -
+        storing an icon on its own makes ``marked_text_icon_for`` raise inside ``headerData``,
+        which silently costs every row its pin.
         """
         label = label or self.MARK_LABEL
         db = self.gui.current_db
@@ -208,7 +210,7 @@ class _BaseGui(InterfaceAction):
                 from qt.core import QIcon
             except ImportError:
                 from PyQt5.Qt import QIcon
-            model.marked_text_icons[label] = QIcon(render_pin('red'))
+            model.marked_text_icons[label] = ('red', QIcon(render_pin('red')))
         except Exception:                                      # noqa: BLE001 - colour is cosmetic
             pass
 
@@ -219,7 +221,37 @@ class _BaseGui(InterfaceAction):
             import traceback
             traceback.print_exc()
             return 0
+
         return len(book_ids)
+
+    def _offer_filter(self, count, label=None):
+        """Ask before narrowing the library down to the flagged books.
+
+        Filtering does make the flags easy to find, but it changes what the user is looking at,
+        so it is never done unannounced. calibre's own "show this again" checkbox remembers the
+        answer, so the question is asked once rather than after every run.
+        """
+        if not count:
+            return False
+        label = label or self.MARK_LABEL
+        try:
+            from calibre.gui2 import question_dialog
+            ok = question_dialog(
+                self.gui, _('Show only the flagged books?'),
+                _('%(n)d book(s) are flagged with a red pin in the row margin.\n\n'
+                  'Search the library for "marked:%(l)s" so that only those are listed? '
+                  'Clearing the search box brings the whole library back.')
+                % {'n': count, 'l': label},
+                default_yes=False,
+                skip_dialog_name='epub_layout_fix_filter_marked',
+                skip_dialog_msg=_('Ask this again'),
+                skip_dialog_skipped_value=False)
+            if not ok:
+                return False
+            self.gui.search.set_search_string('marked:%s' % label)
+            return True
+        except Exception:                                      # noqa: BLE001 - cosmetic only
+            return False
 
     def _repaint_marks(self, book_ids):
         """Make the pins actually appear.
@@ -264,6 +296,15 @@ class _BaseGui(InterfaceAction):
             db.data.set_marked_ids(keep)
             self._repaint_marks(list(done))
         except Exception:                                      # noqa: BLE001
+            return
+
+        # If the view is still filtered to our pins and none are left, stop filtering rather
+        # than leaving the user staring at an empty library.
+        try:
+            if str(self.gui.search.current_text or '').strip() == 'marked:%s' % self.MARK_LABEL:
+                if not [b for b, t in keep.items() if t == self.MARK_LABEL]:
+                    self.gui.search.set_search_string('')
+        except Exception:                                      # noqa: BLE001 - cosmetic only
             pass
 
     @staticmethod
@@ -377,12 +418,14 @@ class _BaseGui(InterfaceAction):
                    if r.get('book_id') is not None and not r.get('error')]
         need = [r['book_id'] for r in results
                 if r.get('book_id') is not None and r.get('changed') and not r.get('error')]
+        flagged = 0
         if dry:
             flagged = self._flag_books(need)
             if flagged:
                 lines.append('')
-                lines.append(_('%(n)d book(s) flagged in the library. Search marked:%(l)s to '
-                               'list only those.') % {'n': flagged, 'l': self.MARK_LABEL})
+                lines.append(_('%(n)d book(s) flagged with a red pin in the row margin. '
+                               'Search for marked:%(l)s to list just those.')
+                             % {'n': flagged, 'l': self.MARK_LABEL})
         else:
             self._unflag_books(touched)
 
@@ -393,6 +436,8 @@ class _BaseGui(InterfaceAction):
 
         info_dialog(self.gui, _('Dry run complete') if dry else _('Layout fix complete'),
                     '\n'.join(lines), det_msg='\n'.join(detail) or None, show=True)
+        # Asked after the summary, so the numbers are read before the view changes under them.
+        self._offer_filter(flagged)
 
     # -- building jobs ------------------------------------------------------------------
     def _metadata_recommendations(self, book_id):
@@ -698,6 +743,7 @@ class ReportGui(_BaseGui):
 
         from calibre_plugins.epub_layout_fix.report_dialog import ReportDialog
         ReportDialog(self.gui, results, marked=self.MARK_LABEL if need else None).exec()
+        self._offer_filter(len(need))
 
     def _commit_results(self, results):
         """A report writes nothing back; only the temporary copies need clearing up."""

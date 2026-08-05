@@ -232,12 +232,24 @@ class FakeModel(object):
         self.refreshed = []
         self.headerDataChanged = FakeSignal()
         self.rows = 3
+        #: calibre stores ``(colour, QIcon)`` pairs here, never bare icons
+        self.marked_text_icons = {}
 
     def refresh_ids(self, ids, current_row=-1):
         self.refreshed.extend(ids)
 
     def rowCount(self, parent=None):
         return self.rows
+
+    def marked_text_icon_for(self, key):
+        """The same subscripting BooksModel does, so a wrong shape fails here too.
+
+        Seeding this cache with a bare QIcon made the real method raise inside ``headerData``,
+        which cost *every* row its pin - and the fake, having no such attribute at all, quietly
+        swallowed the seeding attempt and reported success.
+        """
+        colour, icon = self.marked_text_icons[key]
+        return icon
 
 
 class FakeView(object):
@@ -254,6 +266,18 @@ class FakeView(object):
 
     def viewport(self):
         return self._vp
+
+
+class FakeSearch(object):
+    """Stands in for calibre's search box, which the flagging filters with."""
+
+    def __init__(self):
+        self.current_text = ''
+        self.history = []
+
+    def set_search_string(self, text):
+        self.current_text = text
+        self.history.append(text)
 
 
 class FakeStatusBar(object):
@@ -281,6 +305,7 @@ class FakeGui(_QObject):
         _QObject.__init__(self)
         self.current_db = legacy_db
         self.library_view = FakeView()
+        self.search = FakeSearch()
         self.status_bar = FakeStatusBar()
         self.iactions = {}
         self.covers_refreshed = 0
@@ -541,18 +566,24 @@ def check_flagging(legacy_db, tmp):
     # not, for a while, and every direct test still passed.
     legacy_db.data.set_marked_ids({})
     shown = []
+    import calibre.gui2 as _gui2
     real_info = ui.info_dialog
+    real_question = _gui2.question_dialog
     ui.info_dialog = lambda *a, **k: shown.append(a)
+    _gui2.question_dialog = lambda *a, **k: False        # never filter behind the run's back
     try:
         act._report([{'book_id': a, 'title': 'A', 'name': 'a.epub', 'changed': True,
                       'dry_run': True, 'details': [], 'problems': [], 'ledger': []}])
     finally:
         ui.info_dialog = real_info
+        _gui2.question_dialog = real_question
     check('flag', dict(legacy_db.data.marked_ids).get(a) == act.MARK_LABEL,
           'a dry run through _report pins the book: %r'
           % dict(legacy_db.data.marked_ids).get(a))
     check('flag', shown and 'Dry run' in str(shown[0][1]),
           'and the summary is titled as a dry run: %r' % (shown[0][1] if shown else None))
+    check('flag', gui.search.current_text == '',
+          'declining the offer leaves the view unfiltered: %r' % gui.search.current_text)
 
     # a real run through _report takes it off again
     shown = []
@@ -585,6 +616,68 @@ def check_flagging(legacy_db, tmp):
           'for the vertical header, which is where the pin lives: %r' % orient)
     check('flag', gui.library_view.verticalHeader().viewport().updates >= 1,
           'and the header viewport is told to update')
+
+    # --- the icon itself ---------------------------------------------------------------
+    # The pin is only red because the model's icon cache is seeded before the marks are set,
+    # and that cache holds (colour, QIcon) pairs. A bare icon there is not a cosmetic slip:
+    # marked_text_icon_for raises, headerData dies, and no row gets a pin at all.
+    entry = model.marked_text_icons.get(act.MARK_LABEL)
+    check('flag', isinstance(entry, tuple) and len(entry) == 2,
+          'the icon cache is seeded with a (colour, icon) pair: %r' % (entry,))
+    check('flag', entry and entry[0] == 'red', 'and the colour is red: %r' % (entry and entry[0],))
+    icon = model.marked_text_icon_for(act.MARK_LABEL)
+    check('flag', icon is not None and not icon.isNull(),
+          'which yields a real icon the way BooksModel reads it')
+
+    # --- filtering is offered, never imposed -------------------------------------------
+    # The pin is a few pixels in the margin, so narrowing the view to the flagged books is a
+    # genuine help - but it changes what the user is looking at, so it is asked for first.
+    gui.search.history = []
+    act._flag_books([a])
+    check('flag', gui.search.current_text == '',
+          'flagging on its own does not touch the search box: %r' % gui.search.current_text)
+
+    asked = []
+    import calibre.gui2 as _g2
+    real_g2 = _g2.question_dialog
+    _g2.question_dialog = lambda *a, **k: (asked.append(k.get('skip_dialog_name')), False)[1]
+    try:
+        filtered = act._offer_filter(1)
+    finally:
+        _g2.question_dialog = real_g2
+    check('flag', asked, 'the user is asked before the view is filtered')
+    check('flag', asked and asked[0] == 'epub_layout_fix_filter_marked',
+          'and the answer is remembered under a stable name: %r' % (asked[0] if asked else None))
+    check('flag', filtered is False and gui.search.current_text == '',
+          'declining leaves the library exactly as it was: %r' % gui.search.current_text)
+
+    _g2.question_dialog = lambda *a, **k: True
+    try:
+        filtered = act._offer_filter(1)
+    finally:
+        _g2.question_dialog = real_g2
+    check('flag', filtered and gui.search.current_text == 'marked:%s' % act.MARK_LABEL,
+          'accepting filters the view: %r' % gui.search.current_text)
+
+    # nothing flagged means nothing to ask about
+    asked = []
+    _g2.question_dialog = lambda *a, **k: (asked.append(1), True)[1]
+    try:
+        act._offer_filter(0)
+    finally:
+        _g2.question_dialog = real_g2
+    check('flag', not asked, 'and with nothing flagged the question is not asked at all')
+
+    # clearing the last pin must not leave the user on an empty list
+    act._unflag_books([a])
+    check('flag', gui.search.current_text == '',
+          'unpinning the last book drops the filter again: %r' % gui.search.current_text)
+
+    # a filter the user typed themselves is never cleared behind their back
+    gui.search.set_search_string('author:Nobody')
+    act._unflag_books([a])
+    check('flag', gui.search.current_text == 'author:Nobody',
+          "a search the user typed is left alone: %r" % gui.search.current_text)
 
 
 def check_import_watcher(db, make_epub, tmp):
