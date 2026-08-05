@@ -116,7 +116,7 @@ class _BaseGui(InterfaceAction):
         return ids
 
     # -- job plumbing -------------------------------------------------------------------
-    def _start(self, jobs, description, silent=False):
+    def _start(self, jobs, description, silent=False, worker=None, kind='fix'):
         """Queue one job per book, the way calibre's own Convert action does.
 
         A single batch job gives no per-book progress and cannot be cancelled selectively, so
@@ -124,6 +124,9 @@ class _BaseGui(InterfaceAction):
 
         ``silent`` suppresses the completion dialog when nothing was changed and nothing failed -
         used by the automatic run, which must not interrupt an import that had no work in it.
+
+        ``worker`` and ``kind`` let the report action reuse this plumbing for a pass that only
+        looks; the default is the layout fix.
         """
         if not jobs:
             return
@@ -131,17 +134,19 @@ class _BaseGui(InterfaceAction):
 
         from calibre_plugins.epub_layout_fix.jobs import run_single
 
+        worker = worker or run_single
         batch = {'total': len(jobs), 'results': [], 'done': 0, 'silent': silent,
-                 'description': description}
+                 'kind': kind, 'description': description}
         total = len(jobs)
         for i, spec in enumerate(jobs, 1):
             title = spec.get('title') or os.path.basename(spec['path'])
-            verb = _('Convert and fix') if spec.get('convert_from') else _('Fix layout')
+            verb = _('Examine') if kind == 'report' else (
+                _('Convert and fix') if spec.get('convert_from') else _('Fix layout'))
             if spec.get('dry_run'):
                 verb = _('Dry run:') + ' ' + verb.lower()
             desc = (_('%(verb)s book %(i)d of %(n)d (%(t)s)')
                     % {'verb': verb, 'i': i, 'n': total, 't': title})
-            job = ThreadedJob('epub_layout_fix', desc, run_single, (spec,), {},
+            job = ThreadedJob('epub_layout_fix', desc, worker, (spec,), {},
                               Dispatcher(partial(self._one_finished, batch)))
             self.gui.job_manager.run_threaded_job(job)
         self.gui.status_bar.show_message(description, 3000)
@@ -169,7 +174,8 @@ class _BaseGui(InterfaceAction):
         # results would leave the batch permanently one short and never report.
         batch['done'] += 1
         if batch['done'] >= batch['total']:
-            self._report(batch['results'], silent=batch.get('silent', False))
+            self._report(batch['results'], silent=batch.get('silent', False),
+                         kind=batch.get('kind', 'fix'))
 
     #: the text the flagged books are marked with, so they can be found with marked:needs-fix
     MARK_LABEL = 'needs-fix'
@@ -303,7 +309,7 @@ class _BaseGui(InterfaceAction):
         except Exception:                                      # noqa: BLE001 - cosmetic only
             pass
 
-    def _report(self, results, silent=False):
+    def _report(self, results, silent=False, kind='fix'):
         changed = [r for r in results if r.get('changed') and not r.get('error')]
         failed = [r for r in results if r.get('error')]
         images = sum(r.get('image_pages', 0) for r in results)
@@ -338,13 +344,28 @@ class _BaseGui(InterfaceAction):
                 detail.extend('    ' + d for d in r.get('details', []))
                 detail.extend('    !! ' + p for p in r.get('problems', []))
 
+        # A dry run leaves the books untouched, so whatever would have changed still needs work
+        # and gets pinned. A real run has just fixed them, so the pin comes off.
+        touched = [r['book_id'] for r in results
+                   if r.get('book_id') is not None and not r.get('error')]
+        need = [r['book_id'] for r in results
+                if r.get('book_id') is not None and r.get('changed') and not r.get('error')]
+        if dry:
+            flagged = self._flag_books(need)
+            if flagged:
+                lines.append('')
+                lines.append(_('%(n)d book(s) flagged in the library. Search marked:%(l)s to '
+                               'list only those.') % {'n': flagged, 'l': self.MARK_LABEL})
+        else:
+            self._unflag_books(touched)
+
         if silent and not changed and not failed:
             self.gui.status_bar.show_message(
                 _('Layout fix: nothing to do for %d book(s)') % len(results), 5000)
             return
 
-        info_dialog(self.gui, _('Layout fix complete'), '\n'.join(lines),
-                    det_msg='\n'.join(detail) or None, show=True)
+        info_dialog(self.gui, _('Dry run complete') if dry else _('Layout fix complete'),
+                    '\n'.join(lines), det_msg='\n'.join(detail) or None, show=True)
 
     # -- building jobs ------------------------------------------------------------------
     def _metadata_recommendations(self, book_id):

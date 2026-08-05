@@ -220,7 +220,10 @@ def run_report(job, notifications=None, abort=None, log=None):
                    result, result.error)
     res['book_id'] = job.get('book_id')
     res['title'] = job.get('title') or os.path.basename(job['path'])
-    res['changed'] = False                                     # nothing was written, ever
+    # 'changed' keeps its usual meaning - this book WOULD change - because that is what the
+    # report counts and what decides which books get flagged. Nothing is written regardless:
+    # ReportGui._commit_results only deletes the temporary copy.
+    res['report_only'] = True
     _notify(notifications, 1.0, _('Done'))
     return res
 

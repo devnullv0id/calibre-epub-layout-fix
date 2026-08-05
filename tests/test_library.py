@@ -397,6 +397,62 @@ def check_dry_run(legacy_db, tmp):
           'a real run does write, so the dry run was the only thing holding it back')
 
 
+def check_report_action(legacy_db, tmp):
+    """Drive the report action the way the toolbar does, not just its widgets.
+
+    The widget smoke test cannot catch a signature mismatch between an action and the shared
+    job plumbing, because it never calls run(). This does.
+    """
+    print('\n=== report action, end to end ===')
+    from calibre.ebooks.metadata.book.base import Metadata
+    from calibre_plugins.epub_layout_fix import ui
+
+    db = legacy_db.new_api
+    gui = FakeGui(legacy_db)
+    act = ui.ReportGui(gui, None)
+    act.gui = gui
+
+    book_id = db.add_books([(Metadata('Report Me', ['X']),
+                             {'EPUB': make_broken_epub(os.path.join(tmp, 'rep.epub'))})],
+                           add_duplicates=True)[0][0]
+
+    # every call the action makes must accept the arguments it passes
+    import inspect
+    start = inspect.signature(ui._BaseGui._start).parameters
+    check('report', 'worker' in start and 'kind' in start,
+          '_start accepts the worker and kind the report action passes: %s' % list(start))
+    base_report = inspect.signature(ui._BaseGui._report).parameters
+    check('report', 'kind' in base_report,
+          '_BaseGui._report accepts kind, which ReportGui._report forwards: %s'
+          % list(base_report))
+
+    specs, missing = act._epub_jobs([book_id])
+    check('report', specs and not missing, 'a spec was built for the book')
+
+    from calibre_plugins.epub_layout_fix.jobs import run_report
+    result = run_report(specs[0])
+    check('report', not result['error'], 'the report worker ran: %s' % (result['error'] or 'ok'))
+    check('report', result['changed'] is True, 'it says the book would change')
+    check('report', result['ledger'], 'and it produced a ledger (%d rows)' % len(result['ledger']))
+
+    before = os.path.getsize(os.path.join(tmp, 'rep.epub'))
+    act._commit_results([result])
+    check('report', 'ORIGINAL_EPUB' not in {f.upper() for f in db.formats(book_id)},
+          'a report writes nothing back')
+
+    # and the whole reporting path, including the flagging, without opening a window
+    shown = {}
+    act._report = lambda results, silent=False, kind='fix': shown.update(
+        {'kind': kind, 'flagged': act._flag_books(
+            [r['book_id'] for r in results if r.get('changed')])})
+    act._report([result], kind='report')
+    check('report', shown.get('kind') == 'report', 'the batch kind reaches the reporter')
+    check('report', shown.get('flagged') == 1, 'the book that needs work got flagged')
+    marks = dict(legacy_db.data.marked_ids)
+    check('report', marks.get(book_id) == act.MARK_LABEL,
+          'and carries the pin: %r' % marks.get(book_id))
+
+
 def check_flagging(legacy_db, tmp):
     """Books that still need work get calibre's marked pin; fixing one takes it off again."""
     print('\n=== flagging books that need work ===')
@@ -440,6 +496,36 @@ def check_flagging(legacy_db, tmp):
 
     check('flag', act.MARK_LABEL == 'needs-fix',
           'the label is searchable as marked:needs-fix')
+
+    # --- and the wiring, not just the helper -------------------------------------------
+    # Calling _flag_books directly proves nothing about whether _report ever calls it. It did
+    # not, for a while, and every direct test still passed.
+    legacy_db.data.set_marked_ids({})
+    shown = []
+    real_info = ui.info_dialog
+    ui.info_dialog = lambda *a, **k: shown.append(a)
+    try:
+        act._report([{'book_id': a, 'title': 'A', 'name': 'a.epub', 'changed': True,
+                      'dry_run': True, 'details': [], 'problems': [], 'ledger': []}])
+    finally:
+        ui.info_dialog = real_info
+    check('flag', dict(legacy_db.data.marked_ids).get(a) == act.MARK_LABEL,
+          'a dry run through _report pins the book: %r'
+          % dict(legacy_db.data.marked_ids).get(a))
+    check('flag', shown and 'Dry run' in str(shown[0][1]),
+          'and the summary is titled as a dry run: %r' % (shown[0][1] if shown else None))
+
+    # a real run through _report takes it off again
+    shown = []
+    ui.info_dialog = lambda *a, **k: shown.append(a)
+    try:
+        act._report([{'book_id': a, 'title': 'A', 'name': 'a.epub', 'changed': True,
+                      'details': [], 'problems': [], 'ledger': []}])
+    finally:
+        ui.info_dialog = real_info
+    check('flag', dict(legacy_db.data.marked_ids).get(a) != act.MARK_LABEL,
+          'a real run through _report unpins it: %r'
+          % dict(legacy_db.data.marked_ids).get(a))
 
 
 def check_import_watcher(db, make_epub, tmp):
@@ -603,6 +689,9 @@ def main():
 
         # --- a dry run must do the work and keep none of it -----------------------------
         check_dry_run(ldb, tmp)
+
+        # --- the report action, driven the way the toolbar drives it --------------------
+        check_report_action(ldb, tmp)
 
         # --- flagging books that need work ----------------------------------------------
         check_flagging(ldb, tmp)
