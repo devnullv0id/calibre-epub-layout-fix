@@ -420,12 +420,9 @@ class _BaseGui(InterfaceAction):
                 if r.get('book_id') is not None and r.get('changed') and not r.get('error')]
         flagged = 0
         if dry:
+            # No line about the pins here: the question that follows says the same thing, and
+            # says it where it is actually useful.
             flagged = self._flag_books(need)
-            if flagged:
-                lines.append('')
-                lines.append(_('%(n)d book(s) flagged with a red pin in the row margin. '
-                               'Search for marked:%(l)s to list just those.')
-                             % {'n': flagged, 'l': self.MARK_LABEL})
         else:
             self._unflag_books(touched)
 
