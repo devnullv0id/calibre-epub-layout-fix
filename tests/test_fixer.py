@@ -83,7 +83,54 @@ def test_fixtures(workdir):
 
     for name in ('twoimg', 'caption', 'smallimg'):
         z = zipfile.ZipFile(os.path.join(out, name + '.epub'))
-        check(name, '<svg' not in page(z, 'p1.xhtml'), 'left untouched')
+        check(name, '<svg' not in page(z, 'p1.xhtml'), 'left untouched by default')
+
+    # ---- the two shapes that are only rewritten when asked for ----
+    src = os.path.join(workdir, 'fixtures-src')
+    subprocess.run([sys.executable, os.path.join(HERE, 'make_fixtures.py')],
+                   check=True, capture_output=True, cwd=HERE)
+    shutil.move(os.path.join(HERE, 'fixtures'), src)
+
+    work = os.path.join(workdir, 'cap.epub')
+    shutil.copy(os.path.join(src, 'caption.epub'), work)
+    res = fixer.fix_epub(work, dict(fixer.DEFAULT_SETTINGS, fix_captioned=True))
+    check('captioned', res.changed and not res.problems,
+          'rewritten when allowed: %s' % (res.problems or 'ok'))
+    z = zipfile.ZipFile(work)
+    t = page(z, 'p1.xhtml')
+    z.close()
+    check('captioned', '<svg' in t, 'the image became an SVG page object')
+    check('captioned', '<h1>READ THE FIRST CHAPTER OF</h1>' in t,
+          'the caption keeps its own markup, not just its text')
+    check('captioned', 'html:h1' not in t and 'ns0:' not in t,
+          'no namespace prefix leaks into the caption')
+    check('captioned', 'height: 85.0%' in t,
+          'the image gives up %d%% of the page to the caption' % fixer.CAPTION_SHARE)
+
+    work = os.path.join(workdir, 'multi.epub')
+    shutil.copy(os.path.join(src, 'twoimg.epub'), work)
+    res = fixer.fix_epub(work, dict(fixer.DEFAULT_SETTINGS, fix_multi_image=True))
+    check('multi', res.changed and not res.problems,
+          'rewritten when allowed: %s' % (res.problems or 'ok'))
+    z = zipfile.ZipFile(work)
+    t = page(z, 'p1.xhtml')
+    z.close()
+    check('multi', t.count('<svg') == 2, 'both images kept (%d svg blocks)' % t.count('<svg'))
+    check('multi', 'viewBox="0 0 1200 1800"' in t and 'viewBox="0 0 600 900"' in t,
+          'each image keeps its own dimensions')
+    check('multi', 'height: 50.0%' in t, 'they share the page height')
+
+    # one full-width image beside a narrow one: stacking would blow the small one up, so the
+    # whole page has to be left alone
+    work = os.path.join(workdir, 'multi-narrow.epub')
+    shutil.copy(os.path.join(src, 'mixedwidth.epub'), work)
+    res = fixer.fix_epub(work, dict(fixer.DEFAULT_SETTINGS, fix_multi_image=True))
+    narrow = [e for e in res.ledger if e['category'] == 'too-narrow']
+    check('multi', not res.image_pages and narrow,
+          'a page is skipped whole if any image fails the threshold: %s' % res.ledger)
+    check('multi', '1 of 2 images below the threshold' in (narrow[0]['reason'] if narrow else ''),
+          'and the reason says which: %s' % (narrow[0]['reason'] if narrow else '-'))
+    shutil.rmtree(src, ignore_errors=True)
 
     z = zipfile.ZipFile(os.path.join(out, 'anchors.epub'))
     t = page(z, 'p1.xhtml')

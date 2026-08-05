@@ -96,7 +96,7 @@ class LayoutFixWidget(_PluginWidget):
     HELP = _('Repair full-page images and covers so they fit the screen')
 
     KEYS = ('fix_images', 'min_width_percent', 'fix_covers', 'dark_cover', 'cover_color',
-            'preserve_anchors', 'target_epub_version')
+            'preserve_anchors', 'fix_captioned', 'fix_multi_image', 'target_epub_version')
 
     def build(self):
         layout = QVBoxLayout(self)
@@ -125,6 +125,24 @@ class LayoutFixWidget(_PluginWidget):
             'The table of contents and page list can link to "page.xhtml#anchor". Rewriting a '
             'page would destroy those targets, so the ids are carried across. Leave this on.'))
         form.addRow(self.preserve_anchors)
+
+        self.fix_captioned = QCheckBox(_('Also fix pages with a short caption'))
+        self.fix_captioned.setToolTip(_(
+            'A page holding one image and a caption of up to 120 characters. The image is fitted '
+            'as usual and the caption is kept below it, with its own markup, taking 15% of the '
+            'page height.\n\n'
+            'Off by default because that 15% is a guess: a caption that needs more room than '
+            'that will be clipped.'))
+        form.addRow(self.fix_captioned)
+
+        self.fix_multi_image = QCheckBox(_('Also fix pages holding several images'))
+        self.fix_multi_image.setToolTip(_(
+            'A page with two or more images and no text. Every image is fitted and they are '
+            'stacked, sharing the page height equally.\n\n'
+            'Off by default: the original may have intended them side by side, or at their own '
+            'sizes, and stacking is only a reasonable guess. Every image must qualify on its own '
+            'width, otherwise the page is left alone.'))
+        form.addRow(self.fix_multi_image)
         layout.addWidget(images)
 
         cover = QGroupBox(_('Cover'))
@@ -183,6 +201,8 @@ class LayoutFixWidget(_PluginWidget):
         self.fix_images.setChecked(bool(prefs['fix_images']))
         self.min_width.setValue(float(prefs['min_width_percent']))
         self.preserve_anchors.setChecked(bool(prefs['preserve_anchors']))
+        self.fix_captioned.setChecked(bool(prefs.get('fix_captioned', False)))
+        self.fix_multi_image.setChecked(bool(prefs.get('fix_multi_image', False)))
         self.fix_covers.setChecked(bool(prefs['fix_covers']))
         self.dark_cover.setChecked(bool(prefs['dark_cover']))
         self.cover_color.setText(str(prefs['cover_color']))
@@ -195,6 +215,8 @@ class LayoutFixWidget(_PluginWidget):
         prefs['fix_images'] = self.fix_images.isChecked()
         prefs['min_width_percent'] = float(self.min_width.value())
         prefs['preserve_anchors'] = self.preserve_anchors.isChecked()
+        prefs['fix_captioned'] = self.fix_captioned.isChecked()
+        prefs['fix_multi_image'] = self.fix_multi_image.isChecked()
         prefs['fix_covers'] = self.fix_covers.isChecked()
         prefs['dark_cover'] = self.dark_cover.isChecked()
         colour = (self.cover_color.text() or '').strip()

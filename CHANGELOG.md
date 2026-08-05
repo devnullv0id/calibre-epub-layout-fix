@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-05
+
 ### Added
 
+- **A report action.** *EPUB Layout Fix - report* runs the full detection and writes nothing, then
+  shows one row per book expanding to one row per page examined: action, category, image size and
+  the reason it was chosen. Exports to CSV. The engine could always plan a run without performing
+  it (`analyze_epub`) and has always recorded a ledger entry for every page it looked at; neither
+  had a way in from the interface until now.
+- **Captioned pages and multi-image pages can now be fixed**, both off by default. A page with one
+  image and a caption of up to 120 characters keeps the caption below the image, with its own
+  markup rather than flattened to text, and gives it 15% of the page height. A page with several
+  images and no text stacks them, sharing the height equally, and is skipped whole if any single
+  image fails the width threshold. Both were previously detected and then always left alone.
 - **Beautify all files**, off by default, in the Polish panel. Runs calibre's own
   `pretty_all` — the editor's *Tools → Beautify all files* — over every content document,
   stylesheet and the OPF, last before the layout fixes so the generated pages keep their own
@@ -112,5 +124,6 @@ First working version.
 - Test suites: engine fixtures and parity, an offscreen Qt smoke test, and an end-to-end pipeline
   test.
 
-[Unreleased]: https://github.com/devnullv0id/calibre-epub-layout-fix/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/devnullv0id/calibre-epub-layout-fix/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/devnullv0id/calibre-epub-layout-fix/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/devnullv0id/calibre-epub-layout-fix/releases/tag/v0.1.0

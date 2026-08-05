@@ -502,3 +502,46 @@ class ConvertAndFixGui(_BaseGui):
         self._start(jobs, _('Converting and fixing %d book(s)') % len(jobs))
 
     _pick_source = staticmethod(pick_source)
+
+
+class ReportGui(_BaseGui):
+    """Say what a run would change, and change nothing.
+
+    Useful before turning the plugin loose on a library: it answers "which of these books
+    actually need work, and why was everything else left alone?"
+    """
+
+    name = 'EPUB Layout Fix - report'
+    action_spec = (_('Report layout problems...'), ICON,
+                   _('List what would be changed in the selected books, without touching them'),
+                   None)
+
+    def run(self):
+        ids = self._require_selection()
+        if not ids:
+            return
+        jobs, missing = self._epub_jobs(ids)
+        if missing and not jobs:
+            return error_dialog(self.gui, _('No EPUB'),
+                                _('None of the selected books has an EPUB format.'), show=True)
+        self._start(jobs, _('Examining %d book(s)') % len(jobs),
+                    worker=run_report_worker(), kind='report')
+
+    def _report(self, results, silent=False, kind='fix'):
+        if kind != 'report':
+            return _BaseGui._report(self, results, silent=silent, kind=kind)
+        from calibre_plugins.epub_layout_fix.report_dialog import ReportDialog
+        ReportDialog(self.gui, results).exec()
+
+    def _commit_results(self, results):
+        """A report writes nothing back; only the temporary copies need clearing up."""
+        for r in results:
+            try:
+                os.remove(r['path'])
+            except OSError:
+                pass
+
+
+def run_report_worker():
+    from calibre_plugins.epub_layout_fix.jobs import run_report
+    return run_report

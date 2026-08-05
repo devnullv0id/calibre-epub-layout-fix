@@ -118,13 +118,14 @@ Every push also builds the zip in CI. The artifact is attached to each run, and 
 
 ## Usage
 
-Three actions are contributed, each placeable independently:
+Four actions are contributed, each placeable independently:
 
 | Action | What it does |
 |---|---|
 | **EPUB Layout Fix** | Opens the settings window, then repairs the selected books' existing EPUB |
 | **EPUB Layout Fix - quick run** | Repairs immediately with the stored settings, no dialog |
 | **EPUB Layout Fix - convert and fix** | calibre's own conversion window with **Polish** and **Layout fixes** panels added; converts, polishes, then repairs |
+| **EPUB Layout Fix - report** | Lists what would be changed, page by page, and writes nothing |
 
 The conversion window is calibre's real one, with Metadata, Look & feel, Page setup and the rest
 unchanged, plus two extra categories in the left-hand list.
@@ -160,6 +161,8 @@ added to the library. It is off by default. Before turning it on:
 | Rewrite full-page images | on | Rebuild qualifying pages as SVG page objects |
 | Treat as full-page from | 80% | How wide an image must actually display to qualify |
 | Preserve anchor ids | on | Carry `id` attributes across so TOC and page-list links keep working |
+| Also fix captioned pages | off | One image plus a caption of up to 120 characters, caption kept below |
+| Also fix multi-image pages | off | Two or more images and no text, stacked and sharing the height |
 | Repair stretched covers | on | `preserveAspectRatio="none"` → `xMidYMid meet` |
 | Dark letterbox bands | on | Paint the bands around the cover |
 | Letterbox colour | `#000000` | Any hex colour |
@@ -231,6 +234,15 @@ Every image-bearing page that is not rewritten is recorded with a reason:
 | `unreadable-image` | Image format whose dimensions could not be read |
 | `already-svg-ok` | Already a correct SVG page object |
 
+### Reporting without changing anything
+
+**EPUB Layout Fix - report** runs the same detection as a real run and writes nothing. It opens a
+window with one row per book, expanding to one row per page examined: what was done or skipped, the
+category, the image size and the reason. **Export CSV** writes the lot to a file.
+
+Useful for answering "which of these 900 books actually need work?" before letting the plugin near
+them, and for checking why a page you expected to be fixed was not.
+
 ## Undo
 
 Every modified book gets an `ORIGINAL_EPUB` format, created with the same calibre call the Polish
@@ -243,8 +255,9 @@ are left anywhere.
   to KFX and back reintroduces the defect in a slightly different shape. Re-run the fix afterwards.
   A measured round trip also loses the page-list (492 entries in the book tested) and replaces the
   real ASIN.
-- Captioned image pages are reported, not converted, to avoid destroying the caption text.
-- Multi-image pages are skipped for the same reason.
+- Captioned and multi-image pages are left alone unless you turn them on. Both are off by
+  default because the layout is a guess: a caption gets a fixed 15% of the page and will clip if
+  it needs more, and stacked images may not be what the original intended.
 - Going via AZW3 (`kfx → azw3 → epub`) is worse than converting directly. It fragments chapters and
   loses the same metadata. Convert KFX → EPUB directly.
 

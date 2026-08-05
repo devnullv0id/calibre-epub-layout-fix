@@ -163,6 +163,19 @@ build("twoimg.epub", {
                                ("i1", "a.png", "image/png"), ("i2", "b.png", "image/png")], ["p1"]),
 })
 
+# ---- 6b. two images where only one is full width ----
+# The whole page must be left alone: stacking them would blow up the small one to full width.
+build("mixedwidth.epub", {
+    "style.css": CSS,
+    "a.png": png(1200, 1800), "b.png": png(600, 900),
+    "p1.xhtml": page('<div><img src="a.png" class="imgfull" alt=""/></div>'
+                     '<div class="small"><img src="b.png" class="imgfull" alt=""/></div>'),
+    "content.opf": opf("3.0", [("p1", "p1.xhtml", "application/xhtml+xml"),
+                               ("css", "style.css", "text/css"),
+                               ("i1", "a.png", "image/png"),
+                               ("i2", "b.png", "image/png")], ["p1"]),
+})
+
 # ---- 7. image + heading text ----
 build("caption.epub", {
     "style.css": CSS,

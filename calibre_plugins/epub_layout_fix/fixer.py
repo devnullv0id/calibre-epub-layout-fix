@@ -22,6 +22,7 @@ image is actually displayed. This is what makes the engine work across books fro
 
 from __future__ import annotations
 
+import copy
 import io
 import os
 import posixpath
@@ -59,6 +60,8 @@ DEFAULT_SETTINGS = {
     'dark_cover': True,
     'cover_color': '#000000',
     'preserve_anchors': True,
+    'fix_captioned': False,
+    'fix_multi_image': False,
 }
 
 
@@ -468,81 +471,15 @@ def _excerpt(text, limit=48):
     return t if len(t) <= limit else t[:limit] + '...'
 
 
-def classify_page(zf, entry, names, min_width_percent):
-    """Classify one content document.
+#: A caption longer than this is prose with a picture in it, not a captioned plate.
+CAPTION_LIMIT = 120
 
-    Returns ``None`` only when the page holds no image at all; every image-bearing page yields a
-    result, so nothing is ever dropped without a recorded reason.
-    """
-    text = _text(zf, entry)
-    if text is None:
-        return None
-    has_img = re.search(r'<img\b', text, re.I) is not None
-    has_svg = re.search(r'<svg\b', text, re.I) is not None
-    if not has_img and not has_svg:
-        return None
+#: Share of the page height a caption is given when one is kept.
+CAPTION_SHARE = 15
 
-    root = parse_xhtml(text)
-    if root is None:
-        return _skip(entry, 'unparsable', 'XHTML did not parse as XML')
 
-    body = root.find(XH + 'body')
-    if body is None:
-        body = root.find('body')
-    if body is None:
-        return None
-
-    # ---- already an SVG page object: repair the attribute, never rewrite ----
-    svgs = body.findall('.//' + SVG + 'svg')
-    if svgs:
-        needy = []
-        for sv in svgs:
-            par = sv.get('preserveAspectRatio')
-            vb = sv.get('viewBox')
-            if vb and par and par.strip().lower() != 'none':
-                continue
-            if vb and not par:
-                continue  # unset defaults to xMidYMid meet, which is already correct
-            needy.append(sv)
-        if not needy:
-            return _skip(entry, 'already-svg-ok', 'SVG page object already correct')
-        if all(not sv.get('viewBox') for sv in needy):
-            return _skip(entry, 'svg-no-viewbox', 'SVG has no viewBox; cannot set meet safely')
-        return PageInfo(page=entry, action='svg-repair', category='svg-stretched',
-                        reason='preserveAspectRatio=none on %d svg element(s)' % len(needy),
-                        dims=None)
-
-    imgs = body.findall('.//' + XH + 'img') or body.findall('.//img')
-    if not imgs:
-        return None
-
-    body_text = ''.join(body.itertext()).strip()
-    if body_text:
-        # A short caption beside one image might be a full-page image page and is worth
-        # surfacing; longer text is ordinary prose with an inline image.
-        cat = ('captioned-candidate' if len(imgs) == 1 and len(body_text) <= 120 else 'has-text')
-        return _skip(entry, cat, '%d image(s) + %d chars: "%s"'
-                     % (len(imgs), len(body_text), _excerpt(body_text)))
-
-    if len(imgs) != 1:
-        return _skip(entry, 'multi-image',
-                     '%d images on one page; rewriting would drop all but one' % len(imgs))
-
-    img = imgs[0]
-    src = img.get('src')
-    if not src:
-        return _skip(entry, 'no-src', '<img> has no src attribute')
-    img_entry = resolve_path(entry, src)
-    if not img_entry or img_entry not in names:
-        return _skip(entry, 'missing-image', "src '%s' not in archive" % src)
-
-    dims = image_size(zf.read(img_entry))
-    if not dims:
-        ext = posixpath.splitext(img_entry)[1]
-        return _skip(entry, 'unreadable-image',
-                     "could not read dimensions of '%s' (%s)" % (img_entry.split('/')[-1], ext))
-
-    # ---- resolve the cascade over the body -> ... -> img chain ----
+def _stylesheet_rules(zf, entry, names, root):
+    """Every CSS rule that applies to this document, linked sheets and <style> blocks."""
     rules = []
     for link in root.iter(XH + 'link'):
         rel = (link.get('rel') or '').lower()
@@ -556,8 +493,30 @@ def classify_page(zf, entry, names, min_width_percent):
             rules.extend(parse_css(_text(zf, css_entry)))
     for style in root.iter(XH + 'style'):
         rules.extend(parse_css(''.join(style.itertext())))
+    return rules
 
-    parents = {c: p for p in body.iter() for c in p}
+
+def _measure_image(zf, entry, names, body, parents, rules, img, min_width_percent):
+    """Resolve the cascade for one image and decide whether it is displayed full-page.
+
+    -> a dict with ``src``, ``dims`` and ``full_page``, or one carrying ``skip`` when the image
+    cannot be read at all. Split out of :func:`classify_page` so a page holding several images
+    can have each of them measured the same way.
+    """
+    src = img.get('src')
+    if not src:
+        return {'skip': ('no-src', '<img> has no src attribute', None)}
+    img_entry = resolve_path(entry, src)
+    if not img_entry or img_entry not in names:
+        return {'skip': ('missing-image', "src '%s' not in archive" % src, None)}
+
+    dims = image_size(zf.read(img_entry))
+    if not dims:
+        ext = posixpath.splitext(img_entry)[1]
+        return {'skip': ('unreadable-image',
+                         "could not read dimensions of '%s' (%s)"
+                         % (img_entry.split('/')[-1], ext), None)}
+
     chain_els, cur = [img], img
     while cur is not body and cur in parents:
         cur = parents[cur]
@@ -619,9 +578,6 @@ def classify_page(zf, entry, names, min_width_percent):
         full_page = False
         reason = 'width %s, effective %s%%' % (width, eff_pct)
 
-    if not full_page:
-        return _skip(entry, 'too-narrow', reason, dims)
-
     overflow = []
     for node, style in zip(chain, comp):
         w = style.get('width')
@@ -631,15 +587,162 @@ def classify_page(zf, entry, names, min_width_percent):
         if (is_nonzero(ml) and ml != 'auto') or (is_nonzero(mr) and mr != 'auto'):
             overflow.append('%s width=%s margin=%s/%s' % (node['tag'], w, ml, mr))
 
+    return {'src': src, 'img_entry': img_entry, 'dims': dims, 'full_page': full_page,
+            'reason': reason, 'overflow': overflow, 'alt': img.get('alt')}
+
+
+def _caption_markup(body, img, parents):
+    """The body's non-image children, serialised, so a caption keeps its own markup.
+
+    Namespaces are stripped from the copy before serialising: ElementTree would otherwise emit
+    ``<html:h1>`` with the prefix declared on an ancestor that is not being copied, and the page
+    would not be well-formed. The template's root declares XHTML as the default namespace, so
+    bare tags inherit it.
+
+    Falls back to the plain text if anything goes wrong, which still beats discarding it.
+    """
+    holder = img
+    while holder in parents and parents[holder] is not body:
+        holder = parents[holder]
+
+    parts = []
+    for child in list(body):
+        if child is holder:
+            continue
+        try:
+            clone = copy.deepcopy(child)
+            for node in clone.iter():
+                if isinstance(node.tag, str) and '}' in node.tag:
+                    node.tag = node.tag.split('}', 1)[1]
+                for key in [k for k in node.attrib if '}' in k]:
+                    node.attrib[key.split('}', 1)[1]] = node.attrib.pop(key)
+            raw = ET.tostring(clone, encoding='unicode')
+        except Exception:                                      # noqa: BLE001 - keep the words
+            raw = _xml_escape(''.join(child.itertext()))
+        if raw.strip():
+            parts.append(raw.strip())
+    if not parts:
+        text = ''.join(body.itertext()).strip()
+        return '<p>%s</p>' % _xml_escape(text) if text else ''
+    return '\n'.join(parts)
+
+
+def classify_page(zf, entry, names, min_width_percent, allow_captioned=False, allow_multi=False):
+    """Classify one content document.
+
+    Returns ``None`` only when the page holds no image at all; every image-bearing page yields a
+    result, so nothing is ever dropped without a recorded reason.
+
+    ``allow_captioned`` and ``allow_multi`` opt into rewriting the two shapes that are otherwise
+    only reported: one image with a short caption, and several images with no text at all.
+    """
+    text = _text(zf, entry)
+    if text is None:
+        return None
+    has_img = re.search(r'<img\b', text, re.I) is not None
+    has_svg = re.search(r'<svg\b', text, re.I) is not None
+    if not has_img and not has_svg:
+        return None
+
+    root = parse_xhtml(text)
+    if root is None:
+        return _skip(entry, 'unparsable', 'XHTML did not parse as XML')
+
+    body = root.find(XH + 'body')
+    if body is None:
+        body = root.find('body')
+    if body is None:
+        return None
+
+    # ---- already an SVG page object: repair the attribute, never rewrite ----
+    svgs = body.findall('.//' + SVG + 'svg')
+    if svgs:
+        needy = []
+        for sv in svgs:
+            par = sv.get('preserveAspectRatio')
+            vb = sv.get('viewBox')
+            if vb and par and par.strip().lower() != 'none':
+                continue
+            if vb and not par:
+                continue  # unset defaults to xMidYMid meet, which is already correct
+            needy.append(sv)
+        if not needy:
+            return _skip(entry, 'already-svg-ok', 'SVG page object already correct')
+        if all(not sv.get('viewBox') for sv in needy):
+            return _skip(entry, 'svg-no-viewbox', 'SVG has no viewBox; cannot set meet safely')
+        return PageInfo(page=entry, action='svg-repair', category='svg-stretched',
+                        reason='preserveAspectRatio=none on %d svg element(s)' % len(needy),
+                        dims=None)
+
+    imgs = body.findall('.//' + XH + 'img') or body.findall('.//img')
+    if not imgs:
+        return None
+
+    rules = _stylesheet_rules(zf, entry, names, root)
+    parents = {c: p for p in body.iter() for c in p}
+
+    def measure(img):
+        return _measure_image(zf, entry, names, body, parents, rules, img, min_width_percent)
+
     # Preserve every id: the TOC or page-list can link to "page.xhtml#anchor", and replacing
     # the markup wholesale would break those destinations.
     body_id = body.get('id')
     anchor_ids = [el.get('id') for el in body.iter() if el.get('id') and el.get('id') != body_id]
+    title = posixpath.splitext(posixpath.basename(entry))[0]
 
-    return PageInfo(page=entry, action='rewrite', category='full-page-image', reason=reason,
-                    src=src, img_entry=img_entry, dims=dims, overflow=overflow,
-                    body_id=body_id, anchor_ids=anchor_ids, alt=img.get('alt'),
-                    title=posixpath.splitext(posixpath.basename(entry))[0])
+    def rewrite(category, measured, reason, caption=None):
+        first = measured[0]
+        return PageInfo(page=entry, action='rewrite', category=category, reason=reason,
+                        images=measured, caption=caption,
+                        src=first['src'], img_entry=first['img_entry'], dims=first['dims'],
+                        overflow=[o for m in measured for o in m['overflow']],
+                        body_id=body_id, anchor_ids=anchor_ids, alt=first['alt'], title=title)
+
+    body_text = ''.join(body.itertext()).strip()
+    if body_text:
+        captioned = len(imgs) == 1 and len(body_text) <= CAPTION_LIMIT
+        detail = ('%d image(s) + %d chars: "%s"'
+                  % (len(imgs), len(body_text), _excerpt(body_text)))
+        if not captioned:
+            return _skip(entry, 'has-text', detail)
+        if not allow_captioned:
+            return _skip(entry, 'captioned-candidate', detail)
+        m = measure(imgs[0])
+        if 'skip' in m:
+            return _skip(entry, m['skip'][0], m['skip'][1], m['skip'][2])
+        if not m['full_page']:
+            return _skip(entry, 'too-narrow', m['reason'], m['dims'])
+        caption = _caption_markup(body, imgs[0], parents)
+        if not caption:
+            return _skip(entry, 'captioned-candidate', 'caption could not be preserved')
+        return rewrite('captioned-image', [m],
+                       '%s, caption kept (%d chars)' % (m['reason'], len(body_text)), caption)
+
+    if len(imgs) != 1:
+        if not allow_multi:
+            return _skip(entry, 'multi-image',
+                         '%d images on one page; rewriting would drop all but one' % len(imgs))
+        measured = []
+        for img in imgs:
+            m = measure(img)
+            if 'skip' in m:
+                return _skip(entry, m['skip'][0], m['skip'][1], m['skip'][2])
+            measured.append(m)
+        thin = [m for m in measured if not m['full_page']]
+        if thin:
+            return _skip(entry, 'too-narrow',
+                         '%d of %d images below the threshold: %s'
+                         % (len(thin), len(measured), thin[0]['reason']), thin[0]['dims'])
+        return rewrite('multi-image', measured,
+                       '%d images stacked, each %s of the page height'
+                       % (len(measured), '%d%%' % (100 // len(measured))))
+
+    m = measure(imgs[0])
+    if 'skip' in m:
+        return _skip(entry, m['skip'][0], m['skip'][1], m['skip'][2])
+    if not m['full_page']:
+        return _skip(entry, 'too-narrow', m['reason'], m['dims'])
+    return rewrite('full-page-image', [m], m['reason'])
 
 
 # --------------------------------------------------------------------------------------
@@ -660,34 +763,43 @@ SVG_PAGE_TEMPLATE = """<?xml version='1.0' encoding='utf-8'?>
       @page { margin: 0; padding: 0; }
       html { margin: 0; padding: 0; height: 100%%;%(bg)s }
       body { margin: 0; padding: 0; height: 100%%; text-align: center;%(bg)s }
-      div.fullpage { margin: 0; padding: 0; height: 100%%;
+      div.fullpage { margin: 0; padding: 0; height: %(block)s;
                      text-align: center; page-break-inside: avoid; }
       svg { display: block; margin: 0 auto; padding: 0; height: 100%%;%(bg)s }
+      div.eplf-caption { margin: 0; padding: 0 5%%; height: %(caption_h)s;
+                         text-align: center; overflow: hidden; }
     </style>
   </head>
   <body%(body_id)s>
-<div class="fullpage">%(anchors)s<svg xmlns="http://www.w3.org/2000/svg" \
-xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="100%%" height="100%%" \
-viewBox="0 0 %(w)d %(h)d" preserveAspectRatio="xMidYMid meet"%(a11y)s>%(svg_title)s\
-<image width="%(w)d" height="%(h)d" xlink:href="%(src)s"/></svg></div>
+%(blocks)s%(caption)s
 </body>
 </html>
 """
+
+SVG_BLOCK_TEMPLATE = ('<div class="fullpage">%(anchors)s<svg xmlns="http://www.w3.org/2000/svg" '
+                      'xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" '
+                      'width="100%%" height="100%%" viewBox="0 0 %(w)d %(h)d" '
+                      'preserveAspectRatio="xMidYMid meet"%(a11y)s>%(svg_title)s'
+                      '<image width="%(w)d" height="%(h)d" xlink:href="%(src)s"/></svg></div>')
 
 #: id of the <title> the accessible name points at
 SVG_TITLE_ID = 'eplf-img-title'
 
 
-def build_svg_page(title, src, width, height, body_id=None, anchor_ids=(), preserve_anchors=True,
-                   alt=None, background=None):
-    """A self-contained full-page image document.
+def build_svg_page(title, images, body_id=None, anchor_ids=(), preserve_anchors=True,
+                   caption=None, background=None):
+    """A self-contained image document.
+
+    ``images`` is a list of ``{src, dims, alt}``. One of them fills the page; several are stacked
+    and share the height equally. A ``caption`` is kept below the image, which costs it
+    ``CAPTION_SHARE`` percent of the page.
 
     No ``width:100%`` anywhere - these are block boxes, so auto width already fills the column;
     forcing 100% adds the reader's injected side margins on top and pushes the image right.
     No ``vh`` units either: Adobe RMSDK (Kobo, Tolino, PocketBook) ignores them silently.
 
-    ``alt`` carries the replaced ``<img alt="...">`` across as the SVG's accessible name; without
-    it every rewritten page would lose its only accessible description.
+    Each image's ``alt`` becomes the SVG's accessible name; without it a rewritten page would
+    lose its only accessible description.
     ``background`` paints the letterbox bands, used for the cover.
     """
     anchors = ''
@@ -697,15 +809,29 @@ def build_svg_page(title, src, width, height, body_id=None, anchor_ids=(), prese
             body_attr = ' id="%s"' % _xml_escape(body_id)
         anchors = ''.join('<span id="%s"></span>' % _xml_escape(a) for a in anchor_ids if a)
 
-    alt = (alt or '').strip()
-    a11y = ' role="img" aria-labelledby="%s"' % SVG_TITLE_ID if alt else ' role="img"'
-    svg_title = ('<title id="%s">%s</title>' % (SVG_TITLE_ID, _xml_escape(alt))) if alt else ''
+    caption = (caption or '').strip()
+    available = (100 - CAPTION_SHARE) if caption else 100
+    block_height = '%s%%' % round(available / float(len(images)), 4)
+
+    blocks = []
+    for i, image in enumerate(images):
+        alt = (image.get('alt') or '').strip()
+        # one id per page, so only the first image can own the aria reference
+        title_id = SVG_TITLE_ID if i == 0 else '%s-%d' % (SVG_TITLE_ID, i)
+        a11y = ' role="img" aria-labelledby="%s"' % title_id if alt else ' role="img"'
+        svg_title = ('<title id="%s">%s</title>' % (title_id, _xml_escape(alt))) if alt else ''
+        w, h = image['dims']
+        blocks.append(SVG_BLOCK_TEMPLATE % {
+            'anchors': anchors if i == 0 else '', 'w': w, 'h': h,
+            'src': _xml_escape(image['src']), 'a11y': a11y, 'svg_title': svg_title,
+        })
 
     bg = (' background-color: %s;' % background) if background else ''
     return SVG_PAGE_TEMPLATE % {
-        'title': _xml_escape(title), 'src': _xml_escape(src),
-        'w': width, 'h': height, 'body_id': body_attr, 'anchors': anchors,
-        'a11y': a11y, 'svg_title': svg_title, 'bg': bg,
+        'title': _xml_escape(title), 'body_id': body_attr,
+        'blocks': '\n'.join(blocks),
+        'caption': ('\n<div class="eplf-caption">%s</div>' % caption) if caption else '',
+        'block': block_height, 'caption_h': '%d%%' % CAPTION_SHARE, 'bg': bg,
     }
 
 
@@ -930,7 +1056,9 @@ def _plan(zf, names, settings, result):
         for entry in content_documents(zf, names, opf_name):
             if cover_name and entry == cover_name:
                 continue
-            info = classify_page(zf, entry, names, settings['min_width_percent'])
+            info = classify_page(zf, entry, names, settings['min_width_percent'],
+                                 allow_captioned=settings.get('fix_captioned', False),
+                                 allow_multi=settings.get('fix_multi_image', False))
             if info is None:
                 continue
 
@@ -961,14 +1089,19 @@ def _plan(zf, names, settings, result):
 
             w, h = info['dims']
             replacements[entry] = build_svg_page(
-                info['title'], info['src'], w, h,
+                info['title'], info['images'],
                 info.get('body_id'), info.get('anchor_ids') or (),
-                settings['preserve_anchors'], alt=info.get('alt'))
+                settings['preserve_anchors'], caption=info.get('caption'))
             result.image_pages += 1
             kept = len(info.get('anchor_ids') or ()) + (1 if info.get('body_id') else 0)
+            extra = ''
+            if info['category'] == 'multi-image':
+                extra = ' (%d images stacked)' % len(info['images'])
+            elif info['category'] == 'captioned-image':
+                extra = ' (caption kept)'
             result.details.append(
-                'fix  %s [%dx%d] %s%s%s'
-                % (entry.split('/')[-1], w, h, info['reason'],
+                'fix  %s [%dx%d] %s%s%s%s'
+                % (entry.split('/')[-1], w, h, info['reason'], extra,
                    ('  OVERFLOW: ' + '; '.join(info['overflow'])) if info['overflow'] else '',
                    (' (kept %d anchor id(s))' % kept) if kept else ''))
 
@@ -1141,9 +1274,9 @@ def _fix_cover(zf, cover_name, names, settings, result, replacements):
     if info is not None and info['action'] == 'rewrite':
         w, h = info['dims']
         replacements[cover_name] = build_svg_page(
-            info['title'], info['src'], w, h,
+            info['title'], info['images'],
             info.get('body_id'), info.get('anchor_ids') or (),
-            settings['preserve_anchors'], alt=info.get('alt'), background=colour)
+            settings['preserve_anchors'], background=colour)
         result.image_pages += 1
         result.cover_fixed = bool(colour)
         result.details.append('fix  %s (cover) [%dx%d] rebuilt as a full-page image'

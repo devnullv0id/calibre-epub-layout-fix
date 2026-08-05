@@ -11,7 +11,7 @@ from calibre.customize import InterfaceActionBase
 
 __license__ = 'GPL v3'
 
-PLUGIN_VERSION = (0, 1, 0)
+PLUGIN_VERSION = (0, 2, 0)
 PLUGIN_AUTHOR = 'devnullv0id'
 MIN_CALIBRE = (5, 0, 0)
 
@@ -40,6 +40,13 @@ class ConvertAndFixAction(_Base):
     actual_plugin = 'calibre_plugins.epub_layout_fix.ui:ConvertAndFixGui'
 
 
+class ReportAction(_Base):
+    name = 'EPUB Layout Fix - report'
+    description = ('List what would be changed in the selected books, page by page, without '
+                   'modifying anything')
+    actual_plugin = 'calibre_plugins.epub_layout_fix.ui:ReportGui'
+
+
 class FixLayoutQuickAction(_Base):
     name = 'EPUB Layout Fix - quick run'
     description = ('Repair the selected books immediately using the stored settings, without '
@@ -58,11 +65,11 @@ class FixLayoutAction(_Base):
 
     name = 'EPUB Layout Fix'
     description = ('Repair full-page images and covers in EPUB books so they fit the screen. '
-                   'Adds three toolbar actions.')
+                   'Adds four toolbar actions.')
     actual_plugin = 'calibre_plugins.epub_layout_fix.ui:FixLayoutGui'
 
     #: registered alongside this one
-    COMPANIONS = (ConvertAndFixAction, FixLayoutQuickAction)
+    COMPANIONS = (ConvertAndFixAction, FixLayoutQuickAction, ReportAction)
 
     def initialize(self):
         try:

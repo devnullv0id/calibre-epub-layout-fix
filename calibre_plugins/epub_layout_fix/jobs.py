@@ -207,6 +207,23 @@ def _as_dict(path, steps, result, error):
     return d
 
 
+def run_report(job, notifications=None, abort=None, log=None):
+    """Classify one book and change nothing.
+
+    The engine has always been able to do this - :func:`fixer.analyze_epub` plans every change
+    and writes none of it - but until now only the tests could reach it.
+    """
+    _notify(notifications, 0.1, _('Examining'))
+    result = fixer.analyze_epub(job['path'], job['settings'])
+    res = _as_dict(job['path'], [('report', not result.error, result.error or '')],
+                   result, result.error)
+    res['book_id'] = job.get('book_id')
+    res['title'] = job.get('title') or os.path.basename(job['path'])
+    res['changed'] = False                                     # nothing was written, ever
+    _notify(notifications, 1.0, _('Done'))
+    return res
+
+
 def _notify(notifications, frac, msg):
     if notifications is not None:
         try:

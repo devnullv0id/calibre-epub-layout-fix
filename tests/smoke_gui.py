@@ -53,9 +53,32 @@ def main():
         from calibre.customize.ui import initialized_plugins
         names = {p.name for p in initialized_plugins()}
         for want in ('EPUB Layout Fix', 'EPUB Layout Fix - quick run',
-                     'EPUB Layout Fix - convert and fix'):
+                     'EPUB Layout Fix - convert and fix', 'EPUB Layout Fix - report'):
             assert want in names, 'missing action: %s' % want
-    check('all three actions registered', actions_registered)
+    check('all four actions registered', actions_registered)
+
+    def build_report_dialog():
+        from calibre_plugins.epub_layout_fix.report_dialog import ReportDialog
+        results = [
+            {'book_id': 1, 'title': 'Needs work', 'name': 'a.epub', 'changed': True,
+             'image_pages': 2, 'svg_repaired': 0, 'cover_fixed': True, 'dead_links': 1,
+             'skipped': 3,
+             'ledger': [{'page': 'p1.xhtml', 'action': 'rewrite', 'category': 'full-page-image',
+                         'reason': 'effective width 100%', 'width': 1200, 'height': 1800},
+                        {'page': 'p2.xhtml', 'action': 'skip', 'category': 'too-narrow',
+                         'reason': 'effective width 40%', 'width': 400, 'height': 600}]},
+            {'book_id': 2, 'title': 'Already fine', 'name': 'b.epub', 'changed': False,
+             'ledger': []},
+            {'book_id': 3, 'title': 'Broken', 'name': 'c.epub', 'error': 'unreadable',
+             'ledger': []},
+        ]
+        d = ReportDialog(None, results)
+        assert d.tree.topLevelItemCount() == 3, 'one row per book'
+        assert d.tree.topLevelItem(0).childCount() == 2, 'ledger rows hang off the book'
+        rows = d.rows()
+        assert len(rows) == 4, 'flattened export covers every ledger row plus the empties: %d' % len(rows)
+        assert rows[0][1] == 'p1.xhtml' and rows[0][3] == 'full-page-image', rows[0]
+    check('ReportDialog builds and flattens', build_report_dialog)
 
     def polish_ops():
         ops = panel.polish_operations()
