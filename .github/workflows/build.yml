@@ -28,6 +28,11 @@ jobs:
       - name: Test the engine
         run: python tests/test_fixer.py
 
+      # The settings matrix over the fixtures - no calibre needed, so it runs here too. Pass
+      # books on the command line locally for the wide version.
+      - name: Sweep the settings matrix
+        run: python tests/test_matrix.py
+
       - name: Build the plugin zip
         run: python build.py
 

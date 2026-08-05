@@ -66,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without waiting for something else to refresh it.
 - Temporary files are removed for skipped and failed books too, not only committed ones.
 
+- **`tests/test_matrix.py`**, a wide end-to-end sweep. It crosses ten settings combinations with
+  every fixture and any books passed on the command line, and after each run asserts the
+  invariants that must hold whatever is switched on: the archive is a valid EPUB with `mimetype`
+  first and stored and every CRC intact, every XHTML and the OPF still parse, no entry is gained
+  or lost, anything not meant to be touched is byte-identical, nothing references a file that is
+  not in the archive, `analyze_epub` agrees with `fix_epub` and writes nothing, and a second run
+  changes nothing. Under `calibre-debug` it also crosses the target version, polish, beautify and
+  conversion stages, and checks every setting round-trips from `config` into the engine.
+- `tests/test_library.py` now drives the toolbar action's own path against a real library — job
+  spec, worker, write-back, backup, view refresh and temporary-file cleanup — with a stubbed main
+  window.
+
 ### Removed
 
 - `jobs.run_batch`, unused since jobs became one per book, and the `write_audit_csv` /

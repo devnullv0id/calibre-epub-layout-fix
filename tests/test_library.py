@@ -201,6 +201,140 @@ def check_bulk_convert_dialog(legacy_db, book_ids):
     d.break_cycles()
 
 
+class FakeModel(object):
+    def __init__(self):
+        self.refreshed = []
+
+    def refresh_ids(self, ids, current_row=-1):
+        self.refreshed.extend(ids)
+
+
+class FakeView(object):
+    def __init__(self):
+        self._model = FakeModel()
+
+    def model(self):
+        return self._model
+
+
+class FakeStatusBar(object):
+    def __init__(self):
+        self.messages = []
+
+    def show_message(self, msg, timeout=0):
+        self.messages.append(msg)
+
+
+try:
+    from qt.core import QObject as _QObject
+except ImportError:
+    from PyQt5.Qt import QObject as _QObject
+
+
+class FakeGui(_QObject):
+    """Just enough of calibre's main window for the action's job plumbing.
+
+    A QObject rather than a plain object because InterfaceAction.__init__ passes it straight to
+    QObject.__init__ as the parent.
+    """
+
+    def __init__(self, legacy_db):
+        _QObject.__init__(self)
+        self.current_db = legacy_db
+        self.library_view = FakeView()
+        self.status_bar = FakeStatusBar()
+        self.iactions = {}
+        self.covers_refreshed = 0
+        self.dialogs = []
+
+    def refresh_cover_browser(self):
+        self.covers_refreshed += 1
+
+    def job_exception(self, *a, **kw):
+        pass
+
+
+def check_action_end_to_end(legacy_db, book_id, tmp):
+    """The toolbar action's own path: build the spec, run it, write it back, report.
+
+    Everything between picking a book and the summary dialog, driven for real - the only part
+    stubbed out is calibre's main window.
+    """
+    print('\n=== toolbar action, spec to write-back ===')
+    from calibre.ebooks.metadata.book.base import Metadata
+    from calibre_plugins.epub_layout_fix import jobs, ui
+    from calibre_plugins.epub_layout_fix.config import prefs
+
+    db = legacy_db.new_api
+    gui = FakeGui(legacy_db)
+    act = ui.FixLayoutQuickGui(gui, None)
+    act.gui = gui
+
+    reported = {}
+    act._report = lambda results, silent=False: reported.update(
+        {'results': results, 'silent': silent})
+
+    saved = {k: prefs.get(k) for k in ('dark_cover', 'cover_color', 'fix_images')}
+    try:
+        # --- settings the action reads must reach the spec ---
+        prefs['cover_color'] = '#101010'
+        prefs['dark_cover'] = True
+        specs, missing = act._epub_jobs([book_id])
+        check('action2', len(specs) == 1 and not missing, 'one spec built for one EPUB book')
+        spec = specs[0]
+        check('action2', spec['settings']['cover_color'] == '#101010',
+              'the stored settings reach the job spec')
+        check('action2', os.path.exists(spec['path']), 'the format was copied out to a temp file')
+        check('action2', spec['book_id'] == book_id and spec['title'],
+              'the spec carries the book id and title')
+
+        # --- run it the way the job thread does ---
+        result = jobs.run_single(spec)
+        check('action2', not result['error'], 'the worker succeeded: %s' % (result['error'] or ''))
+        check('action2', result['changed'], 'the book was changed')
+
+        # --- write it back ---
+        act._commit_results([result])
+        check('action2', not result.get('error'), 'commit reported no error')
+        check('action2', book_id in gui.library_view.model().refreshed,
+              'the library view was refreshed for the book')
+        check('action2', not os.path.exists(spec['path']),
+              'the temp file was removed after committing')
+
+        fmts = {f.upper() for f in db.formats(book_id)}
+        check('action2', 'ORIGINAL_EPUB' in fmts, 'a backup was made (%s)' % sorted(fmts))
+
+        out = os.path.join(tmp, 'committed.epub')
+        db.copy_format_to(book_id, 'EPUB', out)
+        with zipfile.ZipFile(out) as z:
+            texts = [z.read(n).decode('utf-8', 'replace') for n in z.namelist()
+                     if n.endswith('.xhtml')]
+        check('action2', any('#101010' in t for t in texts) or not any(
+            'epub-layout-fix' in t for t in texts),
+            'the chosen letterbox colour is in the committed book')
+
+        # --- a book with nothing to convert produces no spec, not a crash ---
+        empty = db.add_books([(Metadata('No Formats', ['Nobody']), {})],
+                             add_duplicates=True)[0][0]
+        specs2, missing2 = act._epub_jobs([empty])
+        check('action2', not specs2 and missing2 == [empty],
+              'a book with no EPUB is reported as missing, not queued')
+        check('action2', act._convert_jobs([empty]) == [],
+              'a book with no formats at all yields no conversion job')
+
+        # --- temp files are cleaned up even when nothing was committed ---
+        specs3, _ = act._epub_jobs([book_id])
+        path3 = specs3[0]['path']
+        act._commit_results([{'book_id': book_id, 'path': path3, 'changed': False,
+                              'error': None, 'name': 'x'}])
+        check('action2', not os.path.exists(path3),
+              'an unchanged book still has its temp file removed')
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                prefs[k] = v
+
+
 def check_import_watcher(db, make_epub, tmp):
     """The automatic run must fire on a real import - and exactly once per book.
 
@@ -352,6 +486,13 @@ def main():
               {'EPUB': make_broken_epub(os.path.join(tmp, 'broken2.epub'))})],
             add_duplicates=True)[0][0]
         check_bulk_convert_dialog(ldb, [book_id, second])
+
+        # --- the toolbar action's own path, end to end ----------------------------------
+        third = db.add_books(
+            [(Metadata('Third Book', ['Test Author']),
+              {'EPUB': make_broken_epub(os.path.join(tmp, 'broken3.epub'))})],
+            add_duplicates=True)[0][0]
+        check_action_end_to_end(ldb, third, tmp)
 
         # --- the automatic run on import -----------------------------------------------
         check_import_watcher(db, make_broken_epub, tmp)

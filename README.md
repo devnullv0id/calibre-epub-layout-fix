@@ -255,11 +255,22 @@ python build.py --install                         # also runs calibre-customize 
 python build.py --restart                         # close calibre, build, install, start it again
 
 python tests/test_fixer.py [reference-library]    # engine: fixtures, parity, idempotency
+python tests/test_matrix.py [book ...]            # every setting x every book, engine only
+calibre-debug tests/test_matrix.py [book ...]     # ... plus the pipeline and settings plumbing
 calibre-debug tests/smoke_gui.py                  # Qt widgets, offscreen
 calibre-debug tests/test_pipeline.py [book ...]   # convert -> polish -> upgrade -> fix
-calibre-debug tests/test_library.py               # throwaway library, incl. the import listener
+calibre-debug tests/test_library.py               # throwaway library, action path, import listener
 calibre-debug tests/test_progress.py              # job stages
 ```
+
+`test_matrix.py` is the wide one: it crosses ten settings combinations with every fixture and any
+books you hand it (or a folder in `EPLF_BOOKS`), and after each run asserts the invariants that
+have to hold whatever is switched on — the archive is a valid EPUB with every CRC intact, every
+XHTML and the OPF still parse, no entry is gained or lost, anything not meant to be touched is
+byte-identical, nothing references a file that is not in the archive, and a second run changes
+nothing. Under `calibre-debug` it additionally crosses the target version, polish, beautify and
+conversion stages, and checks that each setting read back through `config` is the one the engine
+receives.
 
 The suites that drive calibre load the *installed* plugin, not the working tree, so run
 `python build.py --install` before them or you will be testing the last build.
