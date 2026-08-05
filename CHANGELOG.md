@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Beautify all files**, off by default, in the Polish panel. Runs calibre's own
+  `pretty_all` — the editor's *Tools → Beautify all files* — over every content document,
+  stylesheet and the OPF, last before the layout fixes so the generated pages keep their own
+  formatting. It is whitespace-safe by construction, but it changes nothing about the rendered
+  book and rewrites every file, so a book that needed no repair still comes out changed; hence
+  the default.
+
 - **The bulk conversion window when more than one book is selected.** *Convert to EPUB and fix…*
   always opened calibre's single-book window, built for the first selected book, and then applied
   those settings to all of them — including Metadata and a Search & replace written against one
@@ -27,9 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ORIGINAL_EPUB` backup and a per-session record of what has been queued.
 - `alt` text is carried across as the rewritten page's accessible name (`role="img"` plus an SVG
   `<title>`), instead of being dropped.
-- Navigation links pointing at pages that are not in the archive are neutralised — a dangling TOC
-  entry becomes unlinked text, a dangling landmark is removed. calibre leaves one behind whenever
-  it replaces the publisher's cover page.
+- References to files that are not in the archive are neutralised, across every content document
+  rather than only the navigation one — a dangling TOC entry becomes unlinked text, a dangling
+  landmark is removed, and a `<link rel="stylesheet">` pointing at a stylesheet calibre trimmed is
+  dropped. calibre leaves a dead cover link behind whenever it replaces the publisher's cover page,
+  and a dead `page_styles1.css` link in some books.
 - `python build.py --restart` closes calibre, builds, installs and starts calibre again.
   `--check-version` guards a release tag against a mismatched `PLUGIN_VERSION`.
 - A GitHub Actions workflow that runs the engine suite, builds the zip on every push, and attaches

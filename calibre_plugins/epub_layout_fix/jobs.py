@@ -65,6 +65,35 @@ def run_polish(path, operations, log=None, cover_path=None, opf_path=None):
     return True, '; '.join(messages[-3:])
 
 
+def beautify_book(path, log=None):
+    """Pretty-print every file in the book, using calibre's own *Beautify all files*.
+
+    ``calibre.ebooks.oeb.polish.pretty.pretty_all`` is the exact implementation behind the
+    editor's Tools -> Beautify all files, and it is careful about whitespace: it re-indents an
+    element only when :func:`has_only_blocks` says every child is a block-level tag with a
+    whitespace-only tail, so it never inserts whitespace into mixed inline content where it would
+    become a visible space.
+
+    Cosmetic only - nothing about the rendered book improves - and it rewrites every content
+    document, stylesheet and the OPF, so a book that needed no repair still comes out changed.
+    That is why it is off by default.
+    """
+    try:
+        from calibre.ebooks.oeb.polish.container import get_container
+        from calibre.ebooks.oeb.polish.pretty import pretty_all
+        from calibre.utils.logging import Log
+    except ImportError as e:
+        return False, 'beautify unavailable: %s' % e
+
+    try:
+        container = get_container(path, log or Log(), tweak_mode=True)
+        pretty_all(container)
+        container.commit(outpath=path)
+    except Exception as e:                                     # noqa: BLE001
+        return False, '%s: %s' % (type(e).__name__, e)
+    return True, 'pretty-printed'
+
+
 def convert_to_epub(src_path, dest_path, recommendations=None, log=None, target_version='3'):
     """Convert any calibre-readable format to EPUB, in process.
 
@@ -96,8 +125,9 @@ def convert_to_epub(src_path, dest_path, recommendations=None, log=None, target_
 
 
 def process_book(path, settings, polish_ops=None, target_version='3',
-                 convert_from=None, recommendations=None, log=None, progress=None):
-    """The whole pipeline for one file: convert -> polish -> upgrade -> fix.
+                 convert_from=None, recommendations=None, log=None, progress=None,
+                 beautify=False):
+    """The whole pipeline for one file: convert -> polish -> upgrade -> beautify -> fix.
 
     ``progress(fraction, message)`` is called as each stage starts, so the job list shows what
     is actually happening rather than a single "Starting ..." for the whole run.
@@ -124,9 +154,17 @@ def process_book(path, settings, polish_ops=None, target_version='3',
             # a failed polish is not fatal; the layout fixes are still worth applying
 
         if target_version == '3':
-            step(0.75, _('Upgrading to EPUB 3'))
+            step(0.72, _('Upgrading to EPUB 3'))
             ok, msg = upgrade_to_epub3(path, log)
             steps.append(('upgrade', ok, msg))
+
+        if beautify:
+            # last before the fix, so the pages the fix generates keep their own tidy formatting
+            # rather than being re-indented by a pass that has already run
+            step(0.8, _('Beautifying all files'))
+            ok, msg = beautify_book(path, log)
+            steps.append(('beautify', ok, msg))
+            # a failed beautify is cosmetic; the layout fixes are still worth applying
 
         step(0.85, _('Repairing images and cover'))
         result = fixer.fix_epub(path, settings)
@@ -147,6 +185,7 @@ def _as_dict(path, steps, result, error):
         'image_pages': 0,
         'svg_repaired': 0,
         'cover_fixed': False,
+        'dead_links': 0,
         'skipped': 0,
         'changed': False,
         'details': [],
@@ -158,6 +197,7 @@ def _as_dict(path, steps, result, error):
             'image_pages': result.image_pages,
             'svg_repaired': result.svg_repaired,
             'cover_fixed': result.cover_fixed,
+            'dead_links': result.dead_links,
             'skipped': result.skipped,
             'changed': result.changed,
             'details': list(result.details),
@@ -193,7 +233,8 @@ def run_single(job, notifications=None, abort=None, log=None):
     res = process_book(
         job['path'], job['settings'], job.get('polish_ops'),
         job.get('target_version', '3'), job.get('convert_from'),
-        job.get('recommendations'), log, progress=progress)
+        job.get('recommendations'), log, progress=progress,
+        beautify=job.get('beautify', False))
 
     res['book_id'] = job.get('book_id')
     res['title'] = title

@@ -19,8 +19,9 @@ from calibre.gui2.actions import InterfaceAction
 from calibre.gui2.threaded_jobs import ThreadedJob
 from calibre.ptempfile import PersistentTemporaryFile
 
-from calibre_plugins.epub_layout_fix.config import (auto_settings, current_settings,
-                                                    polish_settings, target_epub_version)
+from calibre_plugins.epub_layout_fix.config import (auto_settings, beautify_enabled,
+                                                    current_settings, polish_settings,
+                                                    target_epub_version)
 
 __license__ = 'GPL v3'
 
@@ -146,6 +147,7 @@ class _BaseGui(InterfaceAction):
                 'book_id': None, 'name': job.description, 'title': job.description,
                 'error': _('job failed - see the job details'), 'changed': False,
                 'image_pages': 0, 'svg_repaired': 0, 'cover_fixed': False, 'skipped': 0,
+                'dead_links': 0,
                 'details': [], 'ledger': [], 'problems': [],
             })
             self.gui.job_exception(job, dialog_title=_('Layout fix failed'), retry_func=None)
@@ -220,6 +222,7 @@ class _BaseGui(InterfaceAction):
         images = sum(r.get('image_pages', 0) for r in results)
         svgs = sum(r.get('svg_repaired', 0) for r in results)
         covers = sum(1 for r in results if r.get('cover_fixed'))
+        dead = sum(r.get('dead_links', 0) for r in results)
 
         lines = [
             _('Books processed: %d') % len(results),
@@ -227,6 +230,7 @@ class _BaseGui(InterfaceAction):
             _('Full-page images rewritten: %d') % images,
             _('Stretched SVG/cover repairs: %d') % svgs,
             _('Covers given dark letterbox bands: %d') % covers,
+            _('Dead references removed: %d') % dead,
         ]
         if failed:
             lines.append('')
@@ -291,6 +295,7 @@ class _BaseGui(InterfaceAction):
         jobs = []
         settings = current_settings()
         polish_on, polish_ops = polish_settings(automatic=automatic)
+        beautify = beautify_enabled()
         recs = list(recs)
         for book_id in book_ids:
             fmts = {f.upper() for f in (db.formats(book_id) or ())}
@@ -313,6 +318,7 @@ class _BaseGui(InterfaceAction):
                 'settings': settings,
                 'polish_ops': polish_ops if polish_on else None,
                 'target_version': target_epub_version(),
+                'beautify': beautify,
             })
         return jobs
 
@@ -322,6 +328,7 @@ class _BaseGui(InterfaceAction):
         jobs, missing = [], []
         settings = current_settings()
         polish_on, polish_ops = polish_settings(automatic=automatic)
+        beautify = beautify_enabled()
         for book_id in book_ids:
             fmts = {f.upper() for f in (db.formats(book_id) or ())}
             if 'EPUB' not in fmts:
@@ -337,6 +344,7 @@ class _BaseGui(InterfaceAction):
                 'settings': settings,
                 'polish_ops': polish_ops if polish_on else None,
                 'target_version': target_epub_version(),
+                'beautify': beautify,
             })
         return jobs, missing
 

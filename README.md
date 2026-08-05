@@ -164,6 +164,7 @@ are added to the library. It is **off by default**, and worth understanding befo
 | Letterbox colour | `#000000` | Any hex colour |
 | Target EPUB version | EPUB 3 | EPUB 3 upgrades book internals first; EPUB 2 leaves the version alone |
 | Polish | calibre's own settings | calibre's polish operations, run before the layout fixes |
+| Beautify all files | **off** | Pretty-print the book's source — cosmetic only, see below |
 | Fix books automatically | **off** | Repair books as they are added to the library |
 | Convert other formats | on | Automatic runs convert non-EPUB books, keeping the original format |
 | Wait for the import to finish | 3 s | How long to collect an import before starting one batch |
@@ -171,6 +172,21 @@ are added to the library. It is **off by default**, and worth understanding befo
 
 The Polish panel is built from calibre's own operation list at runtime, so it always matches the
 Polish book dialog rather than drifting from a hardcoded copy.
+
+### Beautify all files
+
+Runs calibre's own *Beautify all files* — the one in the editor's Tools menu — over every content
+document, stylesheet and the OPF. It is whitespace-safe by construction: calibre re-indents an
+element only when every one of its children is a block-level tag with a whitespace-only tail, so it
+never injects whitespace into a run of inline elements where it would become a visible space.
+
+It is **off by default**, and worth leaving off unless you edit books by hand:
+
+- it makes no difference to the rendered book — it is for reading the source in the editor;
+- it rewrites *every* file, so a book that needed no repair still comes out changed and still gets
+  an `ORIGINAL_EPUB` backup, which defeats the plugin's habit of touching only what it must.
+
+It runs last before the layout fixes, so the pages the plugin generates keep their own formatting.
 
 ### Metadata and the cover
 
@@ -185,6 +201,8 @@ replace the publisher's cover page with a regenerated title page at a lower reso
 then leaves the navigation document pointing at the page it just deleted, so "Cover" becomes a dead
 entry in the table of contents. Keeping the original page avoids both. Books that already carry
 that defect, from a conversion done outside the plugin, have those links repaired on the next run.
+The same applies to a `<link rel="stylesheet">` pointing at a stylesheet calibre trimmed: it is
+removed, since a reader cannot load it either way.
 
 ## How detection works
 

@@ -209,6 +209,65 @@ def test_cover_overrides(workdir):
     check('cover', not again.changed, 'a second run changes nothing (idempotent)')
 
 
+def test_beautify(workdir):
+    """Beautify must tidy the markup without changing what the reader shows.
+
+    calibre's pretty_all only re-indents an element when every child is a block tag with a
+    whitespace-only tail, so inline content must come through untouched - injecting whitespace
+    inside a run of inline elements would add visible spaces.
+    """
+    print('\n=== beautify all files ===')
+    from calibre_plugins.epub_layout_fix import jobs
+    from calibre_plugins.epub_layout_fix.config import current_settings
+
+    subprocess.run([sys.executable, os.path.join(HERE, 'make_fixtures.py')],
+                   check=True, capture_output=True, cwd=HERE)
+    book = os.path.join(workdir, 'pretty.epub')
+    shutil.copy(os.path.join(HERE, 'fixtures', 'dangling.epub'), book)
+    shutil.rmtree(os.path.join(HERE, 'fixtures'), ignore_errors=True)
+
+    z = zipfile.ZipFile(book)
+    before = {n: z.read(n).decode('utf-8', 'replace')
+              for n in z.namelist() if n.endswith('.xhtml')}
+    z.close()
+
+    res = jobs.process_book(book, current_settings(), polish_ops=None, target_version='3',
+                            beautify=True)
+    check('beautify', not res['error'], 'pipeline ok: %s' % (res['error'] or 'yes'))
+    step = dict((s, ok) for s, ok, _m in res['steps'])
+    check('beautify', step.get('beautify') is True, 'the beautify stage ran and succeeded')
+
+    z = zipfile.ZipFile(book)
+    after = {n: z.read(n).decode('utf-8', 'replace')
+             for n in z.namelist() if n.endswith('.xhtml')}
+
+    grew = [n for n in before if n in after
+            and after[n].count('\n') > before[n].count('\n')]
+    check('beautify', grew, 'markup was re-indented (%d file(s))' % len(grew))
+
+    # the inline anchors in the nav must stay on their own line, not be exploded
+    nav = after.get('nav.xhtml', '')
+    check('beautify', '<li><a href="p1.xhtml">Chapter One</a></li>' in nav.replace('\n  ', ''),
+          'inline content is not broken apart')
+
+    for n, t in after.items():
+        try:
+            ET.fromstring(t.encode('utf-8'))
+        except ET.ParseError as e:
+            check('beautify', False, '%s not well-formed after beautify: %s' % (n, e))
+
+    i0 = z.infolist()[0]
+    check('beautify', i0.filename == 'mimetype' and i0.compress_type == 0 and z.testzip() is None,
+          'archive still sound')
+    z.close()
+
+    # and the repairs still applied on top
+    check('beautify', res['dead_links'] >= 1,
+          'the dead reference was still removed (%d)' % res['dead_links'])
+    check('beautify', res['image_pages'] >= 1,
+          'the full-page image was still rewritten (%d)' % res['image_pages'])
+
+
 def main():
     sources = [a for a in sys.argv[1:] if os.path.isfile(a)]
     workdir = tempfile.mkdtemp(prefix='eplf-pipeline-')
@@ -216,6 +275,7 @@ def main():
         test_upgrade(workdir)
         test_metadata(workdir)
         test_cover_overrides(workdir)
+        test_beautify(workdir)
         if sources:
             test_convert(workdir, sources)
         else:

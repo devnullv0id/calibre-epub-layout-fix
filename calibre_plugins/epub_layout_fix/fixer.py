@@ -899,6 +899,7 @@ class Result(object):
         self.svg_repaired = 0
         self.cover_fixed = False
         self.skipped = 0
+        self.dead_links = 0
         self.ledger = []          # dicts: page, action, category, reason, width, height
         self.details = []         # human-readable lines
         self.problems = []
@@ -911,9 +912,9 @@ class Result(object):
                 if e['action'] == 'skip' and e['category'] in NOTABLE_SKIPS]
 
     def summary(self):
-        return ('%d image page(s), %d svg repair(s), cover %s, %d skipped'
+        return ('%d image page(s), %d svg repair(s), cover %s, %d dead link(s), %d skipped'
                 % (self.image_pages, self.svg_repaired,
-                   'fixed' if self.cover_fixed else 'unchanged', self.skipped))
+                   'fixed' if self.cover_fixed else 'unchanged', self.dead_links, self.skipped))
 
 
 def _plan(zf, names, settings, result):
@@ -1013,13 +1014,17 @@ def nav_documents(zf, names, opf_name):
 
 
 def repair_nav_links(text, entry, names):
-    """Neutralise navigation links whose target is not in the archive.
+    """Neutralise references whose target is not in the archive.
 
     calibre's conversion replaces the publisher's cover page with a generated title page but
     leaves the navigation document pointing at the file it deleted, so "Cover" is a dead entry in
     the table of contents. A dangling link becomes a ``<span>``, which is what EPUB 3 expects for
     an unlinked heading; in the landmarks list, where a bare ``<span>`` is not allowed, the whole
     entry goes.
+
+    A ``<link rel="stylesheet">`` pointing at a stylesheet that was trimmed from the book is the
+    same defect wearing different clothes - calibre leaves those behind too - and is simply
+    removed, since a reader cannot load it either way.
     """
     dropped = []
 
@@ -1027,12 +1032,24 @@ def repair_nav_links(text, entry, names):
         tgt = resolve_path(entry, href.split('#')[0])
         return bool(tgt) and tgt not in names
 
-    out, pos, changed = [], 0, False
+    def external(href):
+        return href.startswith('#') or bool(re.match(r'^[a-z][a-z0-9+.-]*:', href, re.I))
+
+    # ---- dead <link> elements ----
+    def drop_link(m):
+        href = re.search(r'href\s*=\s*"([^"]*)"', m.group(0))
+        if not href or external(href.group(1)) or not target_missing(href.group(1)):
+            return m.group(0)
+        dropped.append(href.group(1))
+        return ''
+
+    text = re.sub(r'\n?[ \t]*<link\b[^>]*/?>', drop_link, text, flags=re.I)
+
+    # ---- dead <a href> links ----
+    out, pos, changed = [], 0, bool(dropped)
     for m in re.finditer(r'<a\b[^>]*?href\s*=\s*"([^"]+)"[^>]*>', text, re.I):
         href = m.group(1)
-        if href.startswith('#') or re.match(r'^[a-z][a-z0-9+.-]*:', href, re.I):
-            continue
-        if not target_missing(href):
+        if external(href) or not target_missing(href):
             continue
 
         close = text.find('</a>', m.end())
@@ -1067,12 +1084,20 @@ def repair_nav_links(text, entry, names):
 
     if not changed:
         return text, []
+    if not out:
+        return text, dropped                                   # only <link> elements were dropped
     out.append(text[pos:])
     return ''.join(out), dropped
 
 
 def _repair_navigation(zf, names, opf_name, result, replacements):
-    for nav in nav_documents(zf, names, opf_name):
+    """Every content document, not only the nav: a reference to a file calibre trimmed is the
+    same defect wherever it appears."""
+    seen = set()
+    for nav in list(nav_documents(zf, names, opf_name)) + content_documents(zf, names, opf_name):
+        if nav in seen:
+            continue
+        seen.add(nav)
         text = replacements.get(nav) or _text(zf, nav)
         if not text:
             continue
@@ -1080,9 +1105,10 @@ def _repair_navigation(zf, names, opf_name, result, replacements):
         if not dropped:
             continue
         replacements[nav] = fixed
-        result.details.append('nav  %s dropped %d link(s) to missing page(s): %s'
+        result.dead_links += len(dropped)
+        result.details.append('link %s dropped %d reference(s) to missing file(s): %s'
                               % (nav.split('/')[-1], len(dropped), ', '.join(sorted(set(dropped)))))
-        result.ledger.append({'page': nav, 'action': 'nav-repair', 'category': 'dangling-link',
+        result.ledger.append({'page': nav, 'action': 'link-repair', 'category': 'dangling-link',
                               'reason': 'targets not in the archive: %s' % ', '.join(dropped),
                               'width': None, 'height': None})
 

@@ -255,7 +255,7 @@ class PolishWidget(_PluginWidget):
     ICON = 'polish.png'
     HELP = _('Run calibre\'s polishing operations before the layout fixes')
 
-    KEYS = ('polish_enabled', 'polish_ops')
+    KEYS = ('polish_enabled', 'polish_ops', 'beautify')
 
     def build(self):
         layout = QVBoxLayout(self)
@@ -293,6 +293,16 @@ class PolishWidget(_PluginWidget):
         warn.setWordWrap(True)
         layout.addWidget(warn)
 
+        self.beautify = QCheckBox(_('Beautify all files (pretty-print the book\'s source)'))
+        self.beautify.setToolTip(_(
+            'Runs calibre\'s own "Beautify all files", the one in the editor\'s Tools menu. It '
+            'indents the markup only where that cannot change what the reader displays.\n\n'
+            'It makes no difference to the rendered book - it is for reading the source in the '
+            'editor - and it rewrites every content document, stylesheet and the OPF, so a book '
+            'that needed no repair still comes out changed and still gets an ORIGINAL_EPUB '
+            'backup. Leave it off unless you edit books by hand.'))
+        layout.addWidget(self.beautify)
+
         self.enabled.toggled.connect(self.ops_box.setEnabled)
         layout.addStretch(1)
 
@@ -314,10 +324,12 @@ class PolishWidget(_PluginWidget):
         for key, cb in self.boxes.items():
             cb.setChecked(bool(stored.get(key, False)))
         self.ops_box.setEnabled(self.enabled.isChecked())
+        self.beautify.setChecked(bool(prefs.get('beautify', False)))
 
     def save(self):
         prefs['polish_enabled'] = self.enabled.isChecked()
         prefs['polish_ops'] = {k: cb.isChecked() for k, cb in self.boxes.items()}
+        prefs['beautify'] = self.beautify.isChecked()
 
 
 class AutomationWidget(_PluginWidget):

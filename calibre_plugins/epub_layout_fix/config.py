@@ -16,6 +16,10 @@ prefs.defaults['target_epub_version'] = '3'
 prefs.defaults['polish_enabled'] = True
 prefs.defaults['polish_ops'] = {}          # empty -> seeded from calibre's own polish settings
 
+#: Pretty-print every file. Off by default: it changes nothing about the rendered book and
+#: rewrites every document, so a book needing no repair still comes out "changed".
+prefs.defaults['beautify'] = False
+
 #: Automatic runs on import. Off by default: this plugin rewrites books, and nothing should start
 #: doing that to a library without being asked.
 prefs.defaults['auto_on_import'] = False
@@ -58,6 +62,10 @@ def polish_settings(automatic=False):
         for key in AUTO_POLISH_EXCLUDED:
             ops[key] = False
     return bool(prefs.get('polish_enabled', True)), ops
+
+
+def beautify_enabled():
+    return bool(prefs.get('beautify', False))
 
 
 def auto_settings():

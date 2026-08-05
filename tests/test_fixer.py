@@ -117,6 +117,9 @@ def test_fixtures(workdir):
     check('nav', 'epub:type="cover"' not in landmarks and 'bodymatter' in landmarks,
           'the landmarks entry is dropped whole, the valid one is kept')
     check('nav', 'p1.xhtml' in t, 'links that do resolve are untouched')
+    # calibre also leaves <link>s to stylesheets it trimmed from the book
+    check('nav', 'page_styles1.css' not in t, 'the dead stylesheet link is removed')
+    check('nav', 'href="style.css"' in t, 'the stylesheet that does exist is kept')
 
     for f in sorted(os.listdir(out)):
         if not f.endswith('.epub'):
