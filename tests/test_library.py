@@ -201,20 +201,59 @@ def check_bulk_convert_dialog(legacy_db, book_ids):
     d.break_cycles()
 
 
+class FakeSignal(object):
+    def __init__(self):
+        self.emitted = []
+
+    def emit(self, *args):
+        self.emitted.append(args)
+
+
+class FakeViewport(object):
+    def __init__(self):
+        self.updates = 0
+
+    def update(self):
+        self.updates += 1
+
+
+class FakeHeader(object):
+    def __init__(self):
+        self._vp = FakeViewport()
+
+    def viewport(self):
+        return self._vp
+
+
 class FakeModel(object):
+    """Close enough to BooksModel that a wrong call signature shows up here."""
+
     def __init__(self):
         self.refreshed = []
+        self.headerDataChanged = FakeSignal()
+        self.rows = 3
 
     def refresh_ids(self, ids, current_row=-1):
         self.refreshed.extend(ids)
+
+    def rowCount(self, parent=None):
+        return self.rows
 
 
 class FakeView(object):
     def __init__(self):
         self._model = FakeModel()
+        self._header = FakeHeader()
+        self._vp = FakeViewport()
 
     def model(self):
         return self._model
+
+    def verticalHeader(self):
+        return self._header
+
+    def viewport(self):
+        return self._vp
 
 
 class FakeStatusBar(object):
@@ -526,6 +565,26 @@ def check_flagging(legacy_db, tmp):
     check('flag', dict(legacy_db.data.marked_ids).get(a) != act.MARK_LABEL,
           'a real run through _report unpins it: %r'
           % dict(legacy_db.data.marked_ids).get(a))
+
+    # --- the pin has to be repainted, not just recorded --------------------------------
+    # It is drawn by BooksModel.headerData for the vertical header, which refresh_ids does not
+    # invalidate. Setting the ids without that leaves the margin showing whatever it drew last.
+    model = gui.library_view.model()
+    model.headerDataChanged.emitted = []
+    gui.library_view.verticalHeader().viewport().updates = 0
+    act._flag_books([a])
+    check('flag', model.headerDataChanged.emitted,
+          'headerDataChanged is emitted so the margin redraws: %r'
+          % model.headerDataChanged.emitted)
+    try:
+        from qt.core import Qt
+    except ImportError:
+        from PyQt5.Qt import Qt
+    orient = model.headerDataChanged.emitted[0][0]
+    check('flag', orient == Qt.Orientation.Vertical,
+          'for the vertical header, which is where the pin lives: %r' % orient)
+    check('flag', gui.library_view.verticalHeader().viewport().updates >= 1,
+          'and the header viewport is told to update')
 
 
 def check_import_watcher(db, make_epub, tmp):

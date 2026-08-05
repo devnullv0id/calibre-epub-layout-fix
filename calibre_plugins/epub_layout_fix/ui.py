@@ -214,12 +214,39 @@ class _BaseGui(InterfaceAction):
 
         try:
             db.data.set_marked_ids(keep)
-            self.gui.library_view.model().refresh_ids(list(existing) + list(book_ids))
+            self._repaint_marks(list(existing) + list(book_ids))
         except Exception:                                      # noqa: BLE001 - never break a run
             import traceback
             traceback.print_exc()
             return 0
         return len(book_ids)
+
+    def _repaint_marks(self, book_ids):
+        """Make the pins actually appear.
+
+        The pin is drawn by ``BooksModel.headerData`` for the *vertical* header, which
+        ``refresh_ids`` does not touch - it invalidates row cells. Without an explicit
+        ``headerDataChanged`` the marks are set, and searchable, while the margin still shows
+        whatever it drew last.
+        """
+        model = self.gui.library_view.model()
+        try:
+            model.refresh_ids(list(book_ids))
+        except Exception:                                      # noqa: BLE001 - ids off-view
+            pass
+        try:
+            try:
+                from qt.core import Qt
+            except ImportError:
+                from PyQt5.Qt import Qt
+            rows = model.rowCount()
+            if rows:
+                model.headerDataChanged.emit(Qt.Orientation.Vertical, 0, rows - 1)
+            view = self.gui.library_view
+            view.verticalHeader().viewport().update()
+            view.viewport().update()
+        except Exception:                                      # noqa: BLE001 - cosmetic only
+            pass
 
     def _unflag_books(self, book_ids):
         """Take our pin off books that no longer need it, leaving other marks alone."""
@@ -235,7 +262,7 @@ class _BaseGui(InterfaceAction):
             return
         try:
             db.data.set_marked_ids(keep)
-            self.gui.library_view.model().refresh_ids(list(done))
+            self._repaint_marks(list(done))
         except Exception:                                      # noqa: BLE001
             pass
 
