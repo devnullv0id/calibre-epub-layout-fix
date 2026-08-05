@@ -32,6 +32,15 @@ class _Base(InterfaceActionBase):
     def save_settings(self, config_widget):
         config_widget.save_settings()
 
+    def cli_main(self, args):
+        """``calibre-debug -r "EPUB Layout Fix" -- ...``
+
+        Defined on every action rather than only the primary one so any of the four names
+        calibre lists reaches the same command line.
+        """
+        from calibre_plugins.epub_layout_fix.cli import cli_main
+        return cli_main(args)
+
 
 class ConvertAndFixAction(_Base):
     name = 'EPUB Layout Fix - convert and fix'
@@ -65,7 +74,8 @@ class FixLayoutAction(_Base):
 
     name = 'EPUB Layout Fix'
     description = ('Repair full-page images and covers in EPUB books so they fit the screen. '
-                   'Adds four toolbar actions.')
+                   'Adds four toolbar actions and a command line, reached with '
+                   'calibre-debug -r "EPUB Layout Fix" -- --help')
     actual_plugin = 'calibre_plugins.epub_layout_fix.ui:FixLayoutGui'
 
     #: registered alongside this one

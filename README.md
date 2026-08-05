@@ -271,6 +271,56 @@ own marked-books mechanism, the same one Extract ISBN uses. The pin shows in the
 The pin comes off by itself once a real run has fixed the book. Marks made by anything else are
 left alone, and re-running does not leave stale pins behind: only our own label is refreshed.
 
+## Command line
+
+calibre passes a plugin the command line through `calibre-debug -r`, so no GUI is involved:
+
+```
+calibre-debug -r "EPUB Layout Fix" -- --help
+```
+
+It runs the same pipeline the toolbar buttons run, so a book repaired from a script and one
+repaired from the button come out identical.
+
+Files, or directories to scan:
+
+```
+# what would change, without touching anything
+calibre-debug -r "EPUB Layout Fix" -- --report -v book.epub
+
+# repair a tree of books in place, keeping each original as .bak
+calibre-debug -r "EPUB Layout Fix" -- --recursive --backup ~/Books
+
+# convert and repair, leaving the sources alone
+calibre-debug -r "EPUB Layout Fix" -- --convert --output-dir out/ *.azw3
+```
+
+Or books in a library, selected by search, by id, or all of them. Results are written back with
+the usual `ORIGINAL_EPUB` backup, so **Restore original** still works:
+
+```
+calibre-debug -r "EPUB Layout Fix" -- --library ~/Calibre --search "formats:EPUB" --report
+calibre-debug -r "EPUB Layout Fix" -- --library ~/Calibre --ids 41,42
+```
+
+Every layout setting can be overridden per run — `--no-covers`, `--captioned`, `--min-width 70`
+and so on — and each defaults to whatever is saved in calibre. `--defaults` ignores the saved
+configuration entirely, which is what you want in a script that has to behave the same on every
+machine.
+
+`--json` prints the full result of each book, ledger included, for feeding into something else.
+Exit status is 0 when nothing failed, 1 when a book failed, 2 for a bad command line, and 3 when
+`--fail-on-change` was given and a book needs work — enough for a CI job that fails when a title
+lands in the library unrepaired.
+
+Two deliberate differences from the buttons:
+
+- Books are processed on a copy and only moved over the original once every stage has succeeded,
+  so an interrupted run cannot leave a half-polished file behind.
+- The output is kept whenever *any* stage changed the file, not only when the layout fix did.
+  `--convert book.mobi` producing nothing because the book happened to need no layout repair
+  would simply be wrong from a command line.
+
 ## Undo
 
 Every modified book gets an `ORIGINAL_EPUB` format, created with the same calibre call the Polish
@@ -303,6 +353,7 @@ calibre-debug tests/smoke_gui.py                  # Qt widgets, offscreen
 calibre-debug tests/test_pipeline.py [book ...]   # convert -> polish -> upgrade -> fix
 calibre-debug tests/test_library.py               # throwaway library, action path, import listener
 calibre-debug tests/test_progress.py              # job stages
+calibre-debug tests/test_cli.py                   # the command line, end to end
 ```
 
 `test_matrix.py` is the broad one. It crosses ten settings combinations with every fixture and any

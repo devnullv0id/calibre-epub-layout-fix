@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A command line**, reached through calibre's plugin CLI hook:
+  `calibre-debug -r "EPUB Layout Fix" -- --help`. It runs the same pipeline as the toolbar
+  buttons, on files and directories or on books in a library selected by `--search`, `--ids` or
+  `--all`. `--report` and `--dry-run` write nothing; `--convert`, `--output-dir` and `--backup`
+  cover the file cases; every layout setting has a flag that overrides the saved configuration for
+  that run, and `--defaults` ignores the saved configuration entirely. `--json` gives the full
+  result including the ledger, and the exit status distinguishes failure (1), a bad command line
+  (2) and, with `--fail-on-change`, books that need work (3).
+
+  It differs from the buttons in two deliberate ways: books are processed on a copy and only moved
+  over the original once every stage has succeeded, and the output is kept whenever any stage
+  changed the file rather than only when the layout fix did — otherwise `--convert book.mobi`
+  would produce nothing for a book whose layout was already sound.
+
+- `tests/test_cli.py`, driving all of the above through `cli.main` against real books and a
+  throwaway library.
+
+### Fixed
+
+- The red pin never appeared in the row margin. calibre's icon cache maps a label to a
+  `(colour, QIcon)` pair; seeding it with a bare icon made `marked_text_icon_for` raise inside
+  `headerData`, which cost *every* row its pin while leaving the marks themselves intact — so
+  `marked:needs-fix` worked and nothing was visible. The test fake had no such attribute at all,
+  so the failed seeding was swallowed and the suite stayed green; it now models the real shape.
+
+### Changed
+
+- Filtering the library down to the flagged books is now offered rather than done: the question
+  comes after the summary, defaults to no, and carries calibre's *Ask this again* checkbox.
+
 ## [0.2.0] - 2026-08-05
 
 ### Added

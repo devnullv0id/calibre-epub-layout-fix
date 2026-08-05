@@ -19,6 +19,7 @@ from calibre.gui2.actions import InterfaceAction
 from calibre.gui2.threaded_jobs import ThreadedJob
 from calibre.ptempfile import PersistentTemporaryFile
 
+from calibre_plugins.epub_layout_fix import jobs as jobs_module
 from calibre_plugins.epub_layout_fix.config import (auto_settings, beautify_enabled,
                                                     current_settings, dry_run_enabled,
                                                     polish_settings,
@@ -28,19 +29,10 @@ __license__ = 'GPL v3'
 
 ICON = 'format-fill-color.png'
 
-#: Preference order when a book has several formats to convert from. Richer formats first: an
-#: AZW3 carries more structure than the PDF of the same book.
-SOURCE_PREFERENCE = ('KFX', 'AZW3', 'MOBI', 'AZW', 'EPUB', 'KEPUB', 'DOCX', 'FB2', 'PDF')
-
-
-def pick_source(fmts, preferred=None):
-    """The format to convert from, out of the ones this book actually has."""
-    if preferred and preferred.upper() in fmts:
-        return preferred.upper()
-    for f in SOURCE_PREFERENCE:
-        if f in fmts:
-            return f
-    return next(iter(fmts)) if fmts else None
+# Re-exported: they live in jobs.py so the command line, which must not import a Qt widget, can
+# pick a source format the same way the toolbar does.
+SOURCE_PREFERENCE = jobs_module.SOURCE_PREFERENCE
+pick_source = jobs_module.pick_source
 
 
 def bulk_recommendations(db, dialog):
