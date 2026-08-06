@@ -244,8 +244,8 @@ Your library is untouched and no `ORIGINAL_EPUB` backup is made.
 It says so everywhere it could otherwise be mistaken for a real run: the job is named
 *Dry run: fix layout ...*, each stage in the Status column reads *Dry run: polishing* rather than
 *Polishing*, a finished job says *Dry run - discarded* instead of *Finished*, and the summary opens
-with `DRY RUN - nothing was written`. A sticky setting that silently swallowed your changes would
-be a nasty surprise.
+with `DRY RUN - nothing was written`. It is a stored setting, so it stays on until you turn it off.
+
 There is also **Fix layout (dry run)** in the main action's menu, which does one dry run without
 touching the stored setting.
 
@@ -271,18 +271,21 @@ own marked-books mechanism, the same one Extract ISBN uses. The pin shows in the
 The pin comes off by itself once a real run has fixed the book. Marks made by anything else are
 left alone, and re-running does not leave stale pins behind: only our own label is refreshed.
 
+Once the summary is closed you are asked whether to narrow the library to the flagged books. It
+defaults to no and carries calibre's *Ask this again* checkbox, so answering once settles it.
+
 ## Command line
 
-calibre passes a plugin the command line through `calibre-debug -r`, so no GUI is involved:
+calibre hands a plugin the command line through `calibre-debug -r`:
 
 ```
 calibre-debug -r "EPUB Layout Fix" -- --help
 ```
 
-It runs the same pipeline the toolbar buttons run, so a book repaired from a script and one
-repaired from the button come out identical.
+No GUI is involved. The pipeline is the same one the toolbar buttons run, so a book repaired from
+a script matches one repaired from the button.
 
-Files, or directories to scan:
+### Files
 
 ```
 # what would change, without touching anything
@@ -295,54 +298,57 @@ calibre-debug -r "EPUB Layout Fix" -- --recursive --backup ~/Books
 calibre-debug -r "EPUB Layout Fix" -- --convert --output-dir out/ *.azw3
 ```
 
-A directory gives up its EPUBs. With `--convert` it also gives up the formats the plugin converts
-from — KFX, AZW3, MOBI, AZW, KEPUB, DOCX, FB2, PDF — except where an EPUB of the same name is
-sitting beside them, since converting `book.azw3` over the `book.epub` next to it is never what
-was meant. A file named directly on the command line is always taken as given, whatever its
-extension.
+A directory yields its EPUBs. With `--convert` it also yields KFX, AZW3, MOBI, AZW, KEPUB, DOCX,
+FB2 and PDF, skipping any that already has an EPUB of the same name beside it. A file named on the
+command line is always used, whatever its extension.
 
-`--report` only examines EPUBs: it reads the book and writes nothing, so there is no converted
-file for it to look at. Use `--dry-run` for a non-EPUB — it converts into a temporary copy, runs
-the whole pipeline, and keeps none of it.
+`--report` reads the book and writes nothing, so it works on EPUBs only. For anything else use
+`--dry-run`, which converts into a temporary copy, runs the whole pipeline and keeps none of it.
 
-Or books in a library, selected by search, by id, or all of them. Results are written back with
-the usual `ORIGINAL_EPUB` backup, so **Restore original** still works. **Close calibre first** —
-it holds the library in memory, so it will not see the changes and may write over them:
+### Libraries
+
+Books are picked with `--search`, `--ids` or `--all` and written back with an `ORIGINAL_EPUB`
+backup, so **Restore original** works. Close calibre first: it holds the library in memory and
+will not see the changes.
 
 ```
 calibre-debug -r "EPUB Layout Fix" -- --library ~/Calibre --search "formats:EPUB" --report
 calibre-debug -r "EPUB Layout Fix" -- --library ~/Calibre --ids 41,42
 ```
 
-Every layout setting can be overridden per run — `--no-covers`, `--captioned`, `--min-width 70`
-and so on — and each defaults to whatever is saved in calibre. `--defaults` ignores the saved
-configuration entirely, which is what you want in a script that has to behave the same on every
-machine.
+### Options and output
 
-Each book is reported as it finishes, prefixed `[n/total]`, so a long run shows where it is. One
-book failing costs that book and nothing else: the run carries on and the summary counts it.
+Every layout setting has a flag: `--no-covers`, `--captioned`, `--min-width 70` and so on. Each
+starts from the value saved in calibre. `--defaults` ignores the saved configuration, which keeps
+a script behaving the same on every machine.
 
-`--json` prints the full result of each book, ledger included, on stdout with the diagnostics kept
-on stderr. Exit status is 0 when nothing failed, 1 when a book failed, 2 for a bad command line,
-and 3 when `--fail-on-change` was given and a book needs work — enough for a CI job that fails when
-a title lands in the library unrepaired.
+Books are reported as they finish, prefixed `[n/total]`. A book that fails costs that book only;
+the run continues and the summary counts it. `--json` writes the full result of each book, ledger
+included, to stdout, with the diagnostics on stderr.
 
-Differences from the buttons, all deliberate:
+|code|meaning|
+|---|---|
+|0|nothing failed|
+|1|at least one book failed|
+|2|the command line was wrong|
+|3|`--fail-on-change` was given and a book needs work|
 
-- Books are processed on a copy and only moved over the original once every stage has succeeded,
-  so an interrupted run cannot leave a half-polished file behind.
-- A result is kept when the layout fix changed something, when a conversion produced a book that
-  did not exist before, or when a rewriting stage was asked for by name (`--polish`,
-  `--beautify`). Not merely because a stage touched the bytes: polish rewrites a book every time
-  it runs, so keying off that would rewrite every book on every pass — and in a library, replace
-  each book's `ORIGINAL_EPUB` with the previous run's output until the real original was gone.
-  Running twice over the same books now changes nothing the second time.
-- `ORIGINAL_EPUB` is only written when there isn't one already. calibre overwrites it, which is
-  right for a one-off polish and wrong for a command that may be run on a schedule.
-- Polish runs without *Embed referenced fonts* and *Download external resources*, whatever the
-  conversion window has saved. The first copies fonts off this machine into the book, the second
-  fetches remote URLs, and neither belongs in something running unattended — the same reasoning
-  that already excludes them from automatic runs on import.
+### Where it differs from the buttons
+
+Books are processed on a copy, which replaces the original only once every stage has succeeded. An
+interrupted run leaves nothing half-written.
+
+A result is kept when the fix changed something, when a conversion produced a book that did not
+exist before, or when `--polish` or `--beautify` was named. A byte difference on its own is not
+enough. Polish rewrites a book every time it runs, so writing on that basis would rewrite every
+book on every pass, and in a library each pass would replace `ORIGINAL_EPUB` with the previous
+one's output until the real original was gone. Running twice now changes nothing the second time.
+
+`ORIGINAL_EPUB` is written only when there is not one already.
+
+Polish runs without *Embed referenced fonts* and *Download external resources*. The first copies
+fonts from this machine into the book and the second fetches remote URLs; the plugin already keeps
+both out of the runs that fire on import.
 
 ## Undo
 
@@ -398,6 +404,8 @@ across the same 21-book library.
 
 The detection rules come from measuring a 996-book library rather than guesswork, including the 80%
 threshold, which separates genuine full-page art (90–100%) from deliberate ornaments (around 40%).
+
+Built with [Claude Code](https://claude.com/claude-code), using Claude Opus 5.
 
 ## Licence
 

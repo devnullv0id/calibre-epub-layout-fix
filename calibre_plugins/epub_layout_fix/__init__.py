@@ -5,9 +5,10 @@ Repairs full-page images that readers clip or push off the page, and covers that
 generates with ``preserveAspectRatio="none"``.
 
 calibre loads exactly one Plugin subclass per zip, so only the primary action is exported here.
-It registers its two companions at load time (see
-:meth:`action_base.FixLayoutAction.initialize`), which is how one archive ends up contributing
-three independently placeable toolbar buttons.
+It registers its companions at load time (see :meth:`action_base.FixLayoutAction.initialize`),
+which is how one archive ends up contributing four independently placeable toolbar buttons.
+
+Built with Claude Code, using Claude Opus 5.
 """
 
 from __future__ import annotations

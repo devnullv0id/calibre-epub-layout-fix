@@ -9,49 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A command line**, reached through calibre's plugin CLI hook:
-  `calibre-debug -r "EPUB Layout Fix" -- --help`. It runs the same pipeline as the toolbar
-  buttons, on files and directories or on books in a library selected by `--search`, `--ids` or
-  `--all`. `--report` and `--dry-run` write nothing; `--convert`, `--output-dir` and `--backup`
-  cover the file cases; every layout setting has a flag that overrides the saved configuration for
-  that run, and `--defaults` ignores the saved configuration entirely. `--json` gives the full
-  result including the ledger, and the exit status distinguishes failure (1), a bad command line
-  (2) and, with `--fail-on-change`, books that need work (3).
+- **A command line**, through calibre's plugin CLI hook:
+  `calibre-debug -r "EPUB Layout Fix" -- --help`. Runs the same pipeline as the toolbar buttons,
+  on files and directories or on library books picked with `--search`, `--ids` or `--all`.
+  `--report` and `--dry-run` write nothing. `--convert`, `--output-dir` and `--backup` cover the
+  file cases. Every layout setting has a flag; `--defaults` ignores the saved configuration
+  entirely. `--json` gives the full result including the ledger, and the exit status separates a
+  failed book (1), a bad command line (2) and, with `--fail-on-change`, books that need work (3).
 
-  It differs from the buttons deliberately: books are processed on a copy and only moved over the
-  original once every stage has succeeded; a result is kept when the layout fix changed something,
-  when a conversion produced a book that did not exist before, or when a rewriting stage was named
-  on the command line; `ORIGINAL_EPUB` is only written when there is not one already; and polish
-  runs without *Embed referenced fonts* or *Download external resources*, which reach off the
-  machine and have no place in something running unattended.
+  Progress is printed per book as it finishes, and a book that fails costs that book rather than
+  the run. Repeated runs are a no-op: a result is kept only when the fix changed something, a
+  conversion produced a new book, or `--polish`/`--beautify` was named, so a scheduled run cannot
+  churn a library or overwrite each book's `ORIGINAL_EPUB` with the previous run's output. Polish
+  runs without *Embed referenced fonts* and *Download external resources*, which reach off the
+  machine. See the README for the rest.
 
-  Books are reported as they finish, prefixed `[n/total]`, and one book's failure costs that book
-  rather than the run: a locked file three hundred books into a library pass no longer takes down
-  every result already collected. Two inputs whose output would land on the same path fail with
-  the name of the file that claimed it instead of silently overwriting. `--report` skips a
-  non-EPUB with a note pointing at `--dry-run`, rather than reporting the `BadZipFile` its zip
-  reader raised. With `--convert` a directory scan takes the convertible formats too — except
-  where an EPUB of the same name sits beside them.
-
-  An adversarial sweep of the finished command line — bad values, damaged books, hostile paths,
-  repeated runs — turned up the rest: `--min-width` accepted `nan` (which silently matched
-  nothing) and values outside 0–100; `--cover-color` accepted anything at all and injected it into
-  the stylesheet, where the settings panel would have corrected it to `#000000`; `--output-dir`
-  pointing at an existing file surfaced a raw `FileExistsError`; and `--backup`, `--output-dir`
-  and `--fail-on-change` were accepted in modes that cannot act on them. `--backup` also replaced
-  an existing `.bak`, discarding the copy closest to the original. All are now refused or
-  corrected.
-
-- `tests/test_cli.py`, driving all of the above through `cli.main` against real books and a
-  throwaway library.
+- `tests/test_cli.py`, covering the above against real books and a throwaway library.
 
 ### Fixed
 
 - The red pin never appeared in the row margin. calibre's icon cache maps a label to a
-  `(colour, QIcon)` pair; seeding it with a bare icon made `marked_text_icon_for` raise inside
-  `headerData`, which cost *every* row its pin while leaving the marks themselves intact — so
-  `marked:needs-fix` worked and nothing was visible. The test fake had no such attribute at all,
-  so the failed seeding was swallowed and the suite stayed green; it now models the real shape.
+  `(colour, QIcon)` pair; a bare icon there made `marked_text_icon_for` raise inside `headerData`,
+  which cost every row its pin while leaving the marks intact, so `marked:needs-fix` found the
+  books and nothing showed. The test fake had no such attribute, so the failed seeding was
+  swallowed and the suite stayed green. It now models the real shape.
 
 ### Changed
 
