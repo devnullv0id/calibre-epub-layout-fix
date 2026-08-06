@@ -152,7 +152,7 @@ book, the second fetches remote URLs. Neither belongs in something that fires un
 | Also fix captioned pages | off | One image plus a caption of up to 120 characters, caption kept below |
 | Also fix multi-image pages | off | Two or more images and no text, stacked and sharing the height |
 | Repair stretched covers | on | `preserveAspectRatio="none"` → `xMidYMid meet` |
-| Dark letterbox bands | on | Paint the bands around the cover |
+| Dark letterbox bands | on | Paint the bands around the cover. Off states `transparent`, so it also clears a background the book already had |
 | Letterbox colour | `#000000` | Any hex colour |
 | Target EPUB version | EPUB 3 | EPUB 3 upgrades book internals first; EPUB 2 leaves the version alone |
 | Polish | calibre's own settings | calibre's polish operations, run before the layout fixes |
@@ -275,6 +275,11 @@ anywhere, except where you asked for them with the command line's `--backup`.
   more, and stacked images may not be what the original intended.
 - Going via AZW3 (`kfx → azw3 → epub`) is worse than converting directly. It fragments chapters and
   loses the same metadata. Convert KFX → EPUB directly.
+- The cover overrides are appended to the page's own stylesheet, so on a cover page that already
+  styles `html, body` or `svg` calibre's *Check book* reports a duplicate selector. It renders
+  correctly — the plugin's rules come last and are `!important` — and it only happens where another
+  tool wrote those selectors first: one book in seventeen, in a library that had been through the
+  PowerShell script this was ported from.
 
 ## Credits
 

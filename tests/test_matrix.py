@@ -81,7 +81,43 @@ def unresolved_refs(path):
     return bad
 
 
-def assert_sound(group, label, original, path, changed_entries):
+def dangling_fragments(path):
+    """Every internal link whose ``#fragment`` names an id the target does not declare.
+
+    :func:`unresolved_refs` splits the fragment off and only checks that the file exists, so the
+    anchor half of every link has gone unchecked - and carrying ids across a rewritten page is one
+    of the things the plugin promises. A TOC entry pointing at ``p1.xhtml#page_42`` is broken just
+    as thoroughly by a missing ``id`` as by a missing file.
+    """
+    out = set()
+    with zipfile.ZipFile(path) as z:
+        names = {i.filename for i in z.infolist() if not i.filename.endswith('/')}
+        textish = [n for n in sorted(names)
+                   if n.lower().endswith(('.xhtml', '.html', '.htm', '.opf', '.ncx'))]
+        text = {}
+        for n in textish:
+            text[n] = z.read(n).decode('utf-8', 'replace')
+        ids = {n: set(re.findall(r'\bid\s*=\s*"([^"]+)"', t))
+                  | set(re.findall(r'<a\b[^>]*\bname\s*=\s*"([^"]+)"', t, re.I))
+               for n, t in text.items()}
+        for n, t in text.items():
+            refs = [m.group(2) for m in
+                    re.finditer(r'(?:^|[^:\w])(href|src)\s*=\s*"([^"]+)"', t)]
+            refs += [m.group(1) for m in re.finditer(r'xlink:href\s*=\s*"([^"]+)"', t)]
+            for val in refs:
+                if '#' not in val or re.match(r'^[a-z][a-z0-9+.-]*:', val, re.I):
+                    continue
+                target, frag = val.split('#', 1)
+                if not frag:
+                    continue
+                entry = fixer.resolve_path(n, target) if target else n
+                # a missing *file* is unresolved_refs' business, not ours
+                if entry in ids and frag not in ids[entry]:
+                    out.add('%s -> %s' % (n, val))
+    return out
+
+
+def assert_sound(group, label, original, path, changed_entries, anchors_kept=True):
     """Everything that must be true of a rebuilt book, whatever the settings were."""
     with zipfile.ZipFile(path) as z:
         infos = [i for i in z.infolist() if not i.filename.endswith('/')]
@@ -114,6 +150,18 @@ def assert_sound(group, label, original, path, changed_entries):
 
     bad = unresolved_refs(path)
     check(group, not bad, '%s: no dangling references (%s)' % (label, bad[:3]))
+
+    # Only the anchors this run broke count. A book can arrive with broken ones of its own, and
+    # measuring against zero rather than against the input is what produced 115 false failures
+    # the first time the settings checks met a real library.
+    #
+    # Skipped with preserve_anchors off, where dropping the ids - and so breaking every link into
+    # a rewritten page - is exactly what the setting is documented to do.
+    if anchors_kept:
+        broke = dangling_fragments(path) - dangling_fragments(original)
+        check(group, not broke,
+              '%s: no internal link left pointing at a missing id (%s)'
+              % (label, sorted(broke)[:3]))
 
 
 def changed_entries_of(original, path):
@@ -179,7 +227,8 @@ def run_matrix(book, workdir):
             continue
 
         assert_sound('engine', '%s/%s' % (name, label), book, work,
-                     changed_entries_of(book, work))
+                     changed_entries_of(book, work),
+                     anchors_kept=settings.get('preserve_anchors', True))
 
         # --- the setting actually did what it says ---
         txt = pages(work)
@@ -218,8 +267,12 @@ def run_matrix(book, workdir):
             blocks = [m.group(0) for t in txt.values()
                       for m in [fixer._COVER_BLOCK_RE.search(t)] if m]
             if blocks:
-                check('setting', 'background-color' not in blocks[0],
-                      '%s/%s: no letterbox colour in the block this run wrote' % (name, label))
+                # "off" is stated rather than left unsaid, so it also overrides a background the
+                # book already carried - which is the whole point of the setting
+                check('setting', 'background-color: transparent !important' in blocks[0],
+                      '%s/%s: the letterbox is explicitly transparent' % (name, label))
+                check('setting', not re.search(r'background-color:\s*#', blocks[0]),
+                      '%s/%s: and no colour is painted' % (name, label))
                 check('setting', 'width: auto !important' in blocks[0],
                       '%s/%s: the sizing overrides are still applied' % (name, label))
         if overrides.get('cover_color'):

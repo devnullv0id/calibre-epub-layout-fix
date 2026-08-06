@@ -36,7 +36,13 @@ calibre-debug tests/test_pipeline.py [book ...]   # convert -> polish -> upgrade
 calibre-debug tests/test_library.py               # throwaway library, action path, import listener
 calibre-debug tests/test_progress.py              # job stages
 calibre-debug tests/test_cli.py                   # the command line, end to end
+calibre-debug tests/test_oracle.py                # calibre's own Check book, before vs after
 ```
+
+`test_oracle.py` is the only suite that judges the fix by something other than the plugin's own
+assumptions: it runs calibre's *Tools → Check book* before and after and fails if a warning or
+error class appears more often afterwards. Set `EPLF_BOOKS` to include real books — off by default
+because the checker is slow, several minutes for 32 books.
 
 The suites that drive calibre load the **installed** plugin, not the working tree. Run
 `python build.py --install` first or you will be testing the last build.

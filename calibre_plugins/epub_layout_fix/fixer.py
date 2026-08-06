@@ -876,9 +876,14 @@ def cover_rules(color=None):
     * ``@page { margin: 5pt }`` and ``body { margin: 0 5pt }`` survive from the book's stylesheet
       and put a gutter around what should be a full-bleed page.
 
-    ``color`` additionally paints the letterbox bands.
+    ``color`` paints the letterbox bands. ``None`` means the setting is off, and that is stated as
+    ``transparent`` rather than left unsaid: a cover page can already carry a background of its
+    own - books put through the PowerShell script this was ported from carry
+    ``svg { background-color: #000000 }`` - and saying nothing would leave those bands black with
+    the setting switched off. The declaration is ``!important`` either way, so it also overrides a
+    background the publisher chose deliberately.
     """
-    bg = (' background-color: %s !important;' % color) if color else ''
+    bg = ' background-color: %s !important;' % (color or 'transparent')
     return ('\n            /* %s */\n'
             '            @page { margin: 0; padding: 0; }\n'
             '            html, body { margin: 0 !important; padding: 0 !important;\n'

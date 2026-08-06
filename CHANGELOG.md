@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Dark letterbox bands off now means off.** It stopped the plugin painting a band but left one
+  the book already carried, so books put through the PowerShell script this was ported from - which
+  writes `svg { background-color: #000000 }` into the cover page - still showed black bands with the
+  setting switched off. The block now states `background-color: transparent !important` when the
+  setting is off, which also overrides a background the publisher chose.
+- Two runs queued over the same book before either finished - a double-clicked button, or a manual
+  run racing the import listener - left `ORIGINAL_EPUB` holding the first run's output instead of
+  the real original, so *Restore original* restored an already-processed book.
+- The report's CSV export wrote book text straight out, so a title beginning `=`, `+`, `-` or `@`
+  became a formula when the file was opened in a spreadsheet.
+
+### Added
+
+- `tests/test_oracle.py`, which runs calibre's own *Tools → Check book* before and after the fix
+  and fails if a warning or error class appears more often afterwards - the only suite that judges
+  the plugin by something other than its own assumptions. Over 32 real books, 11 came out cleaner.
+- The settings matrix now checks that no internal link is left pointing at a missing id.
+  `unresolved_refs` splits the `#fragment` off and only verifies the file, so the anchor half of
+  every link had gone untested while anchor preservation is a headline feature. The `anchors.epub`
+  fixture gained the nav and NCX links its name always implied, so the check has something to bite
+  on in CI rather than only against real books.
 
 ## [0.2.0] - 2026-08-06
 

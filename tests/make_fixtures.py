@@ -188,12 +188,44 @@ build("caption.epub", {
 })
 
 # ---- 8. anchors that the TOC links to ----
+# The links matter as much as the ids. Rewriting p1.xhtml as an SVG page object throws its markup
+# away and rebuilds it, so a run that fails to carry the ids across leaves every one of these
+# pointing at nothing - and a fixture with ids that nothing links to cannot show that.
+anchor_nav = """<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"
+      xml:lang="en">
+  <head><title>Contents</title></head>
+  <body>
+    <nav epub:type="toc"><ol>
+      <li><a href="p1.xhtml#wrap">The plate</a></li>
+      <li><a href="p1.xhtml#theimg">The image itself</a></li>
+    </ol></nav>
+    <nav epub:type="page-list" hidden="hidden"><ol>
+      <li><a href="p1.xhtml#page_42">42</a></li>
+    </ol></nav>
+  </body>
+</html>
+"""
+anchor_ncx = """<?xml version='1.0' encoding='utf-8'?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:fixture"/></head>
+  <docTitle><text>Fixture</text></docTitle>
+  <navMap>
+    <navPoint id="np1" playOrder="1"><navLabel><text>The plate</text></navLabel>
+      <content src="p1.xhtml#wrap"/></navPoint>
+  </navMap>
+</ncx>
+"""
 build("anchors.epub", {
     "style.css": CSS,
     "a.png": png(1200, 1800),
     "p1.xhtml": page('<div id="wrap"><span id="page_42"></span>'
                      '<img src="a.png" class="imgfull" alt="" id="theimg"/></div>'),
-    "content.opf": opf("3.0", [("p1", "p1.xhtml", "application/xhtml+xml"),
+    "nav.xhtml": anchor_nav,
+    "toc.ncx": anchor_ncx,
+    "content.opf": opf("3.0", [("nav", "nav.xhtml", "application/xhtml+xml", "nav"),
+                               ("ncx", "toc.ncx", "application/x-dtbncx+xml"),
+                               ("p1", "p1.xhtml", "application/xhtml+xml"),
                                ("css", "style.css", "text/css"),
                                ("i1", "a.png", "image/png")], ["p1"]),
 })
