@@ -26,6 +26,7 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 
 from calibre_plugins.epub_layout_fix import fixer, jobs
 
@@ -92,7 +93,8 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter)
 
     p.add_argument('paths', nargs='*', metavar='PATH',
-                   help='EPUB files, or directories to scan for them')
+                   help='EPUB files, or directories to scan for them; with --convert, '
+                        'directories give up their convertible formats too')
     p.add_argument('--recursive', action='store_true',
                    help='descend into sub-directories of a PATH (default: top level only)')
 
@@ -128,7 +130,8 @@ def build_parser():
     pipe.add_argument('--convert', action='store_true',
                       help='convert non-EPUB input to EPUB first')
     pipe.add_argument('--from-format', metavar='FMT',
-                      help='in library mode, convert from this format rather than the best one')
+                      help='library mode only: convert from this format rather than the best '
+                           'one (a named file already says which format it is)')
     pipe.add_argument('--epub-version', choices=('2', '3'), dest='epub_version',
                       help="target EPUB version ('2' means leave the version alone)")
     _pair(pipe, 'polish', 'polish', "run calibre's polish stage with its saved operations")
@@ -205,8 +208,17 @@ def resolve_pipeline(opts, warnings):
 
 # -- gathering work ---------------------------------------------------------------------
 
-def collect_files(paths, recursive, warnings):
-    """-> the files to work on, in the order they were named. Directories expand to EPUBs."""
+def collect_files(paths, recursive, warnings, extra_formats=()):
+    """-> the files to work on, in the order they were named. Directories expand to books.
+
+    A directory normally gives up its EPUBs only. ``extra_formats`` - the convertible formats,
+    passed when ``--convert`` is on - widens that, because ``--convert --recursive ~/Books`` that
+    walked straight past every AZW3 would not be doing what it says.
+
+    A file named on the command line is always taken as given: someone who types a filename has
+    already decided.
+    """
+    wanted = {'.epub'} | {'.' + f.lower() for f in extra_formats}
     found, seen = [], set()
 
     def add(p):
@@ -217,23 +229,38 @@ def collect_files(paths, recursive, warnings):
             seen.add(real)
             found.append(os.path.normpath(p))
 
+    def scan(root, names):
+        for f in sorted(names):
+            full = os.path.join(root, f)
+            if os.path.isfile(full) and os.path.splitext(f)[1].lower() in wanted:
+                add(full)
+
     for p in paths:
         if os.path.isdir(p):
             if recursive:
                 for root, _dirs, files in os.walk(p):
-                    for f in sorted(files):
-                        if f.lower().endswith('.epub'):
-                            add(os.path.join(root, f))
+                    scan(root, files)
             else:
-                for f in sorted(os.listdir(p)):
-                    full = os.path.join(p, f)
-                    if os.path.isfile(full) and f.lower().endswith('.epub'):
-                        add(full)
+                scan(p, os.listdir(p))
         elif os.path.isfile(p):
             add(p)
         else:
             warnings.append('no such file or directory: %s' % p)
-    return found
+    return _drop_shadowed(found)
+
+
+def _drop_shadowed(files):
+    """Drop a convertible file whose EPUB is also in the list.
+
+    A directory holding both ``book.azw3`` and ``book.epub`` would otherwise convert the AZW3
+    straight over the EPUB that is sitting right there - and, because the list is sorted, do it
+    before the EPUB itself is even looked at.
+    """
+    epubs = {os.path.normcase(os.path.splitext(f)[0]) for f in files
+             if f.lower().endswith('.epub')}
+    return [f for f in files
+            if f.lower().endswith('.epub')
+            or os.path.normcase(os.path.splitext(f)[0]) not in epubs]
 
 
 def resolve_ids(db, opts):
@@ -287,64 +314,93 @@ def run_one(job, opts, out):
     return jobs.run_single(job, notifications=notifier, log=log)
 
 
+NOT_EPUB = 'not an EPUB (use --convert)'
+NO_REPORT = ('not an EPUB; --report only examines EPUBs. Use --dry-run to see what a real run '
+             'would produce - it converts into a temporary copy and keeps nothing.')
+
+
 def process_files(paths, ctx, opts, out):
-    """Work through standalone files. -> list of result dicts."""
-    results = []
-    for path in paths:
-        ext = os.path.splitext(path)[1].lower()
-        converting = ext != '.epub'
-        if converting and not opts.convert:
-            results.append(_skipped(path, 'not an EPUB (use --convert)'))
-            continue
+    """Work through standalone files. -> list of result dicts.
 
-        base = os.path.splitext(os.path.basename(path))[0] + '.epub'
-        if opts.output_dir:
-            final = os.path.join(opts.output_dir, base)
-        elif converting:
-            final = os.path.normpath(os.path.join(os.path.dirname(path), base))
-        else:
-            final = path
-
-        tmpdir = tempfile.mkdtemp(prefix='eplf-cli-')
-        work = os.path.join(tmpdir, base)
+    Each book is printed as it finishes rather than at the end, and one book's failure is recorded
+    and stepped over: a locked file three hundred books into a run should cost that book, not the
+    run and every result already collected.
+    """
+    results, claimed = [], {}
+    for n, path in enumerate(paths, 1):
         try:
-            before = None
-            if converting:
-                job_convert_from = path
-            else:
-                shutil.copy2(path, work)
-                before = _digest(work)
-                job_convert_from = None
-
-            job = dict(ctx['job'], path=work, title=os.path.basename(path),
-                       convert_from=job_convert_from)
-            if opts.report:
-                # nothing is written, so the report reads the original rather than a copy
-                job['path'] = path
-            result = run_one(job, opts, out)
-            result['source'] = path
-
-            if opts.report or opts.dry_run or result.get('error'):
-                results.append(result)
-                continue
-
-            # Any stage may have changed the book, not only the layout fix, so the file itself
-            # is the authority on whether there is something worth keeping.
-            changed = converting or (os.path.exists(work) and _digest(work) != before)
-            result['changed_on_disk'] = changed
-            if changed:
-                if opts.backup and final == path and os.path.exists(path):
-                    shutil.copy2(path, path + '.bak')
-                    result['backup'] = path + '.bak'
-                d = os.path.dirname(final)
-                if d and not os.path.isdir(d):
-                    os.makedirs(d)
-                shutil.move(work, final)
-                result['written'] = final
-            results.append(result)
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            result = _one_file(path, ctx, opts, out, claimed)
+        except Exception:                                      # noqa: BLE001 - one book, not the run
+            result = _failed(path, traceback.format_exc())
+        results.append(result)
+        _emit(result, opts, out, n, len(paths))
     return results
+
+
+def _one_file(path, ctx, opts, out, claimed):
+    converting = os.path.splitext(path)[1].lower() != '.epub'
+    if converting:
+        if not opts.convert:
+            return _skipped(path, NOT_EPUB)
+        if opts.report:
+            # run_report only ever opens a zip, so pointing it at a MOBI reports a BadZipFile
+            # that says nothing about the book
+            return _skipped(path, NO_REPORT)
+
+    base = os.path.splitext(os.path.basename(path))[0] + '.epub'
+    if opts.output_dir:
+        final = os.path.join(opts.output_dir, base)
+    elif converting:
+        final = os.path.normpath(os.path.join(os.path.dirname(path), base))
+    else:
+        final = path
+
+    if not (opts.report or opts.dry_run):
+        # Two inputs can share a basename, and a conversion can land on a book already in the
+        # list. Losing the first result silently is the worst of the available outcomes.
+        key = os.path.normcase(os.path.abspath(final))
+        if key in claimed:
+            return _failed(path, 'would overwrite the output of %s' % claimed[key])
+        claimed[key] = path
+
+    tmpdir = tempfile.mkdtemp(prefix='eplf-cli-')
+    work = os.path.join(tmpdir, base)
+    try:
+        before = None
+        if converting:
+            job_convert_from = path
+        else:
+            shutil.copy2(path, work)
+            before = _digest(work)
+            job_convert_from = None
+
+        job = dict(ctx['job'], path=work, title=os.path.basename(path),
+                   convert_from=job_convert_from)
+        if opts.report:
+            # nothing is written, so the report reads the original rather than a copy
+            job['path'] = path
+        result = run_one(job, opts, out)
+        result['source'] = path
+
+        if opts.report or opts.dry_run or result.get('error'):
+            return result
+
+        # Any stage may have changed the book, not only the layout fix, so the file itself
+        # is the authority on whether there is something worth keeping.
+        changed = converting or (os.path.exists(work) and _digest(work) != before)
+        result['changed_on_disk'] = changed
+        if changed:
+            if opts.backup and final == path and os.path.exists(path):
+                shutil.copy2(path, path + '.bak')
+                result['backup'] = path + '.bak'
+            d = os.path.dirname(final)
+            if d and not os.path.isdir(d):
+                os.makedirs(d)
+            shutil.move(work, final)
+            result['written'] = final
+        return result
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def process_library(opts, ctx, out):
@@ -361,66 +417,76 @@ def process_library(opts, ctx, out):
     try:
         ids = resolve_ids(db, opts)
         results = []
-        for book_id in ids:
-            fmts = {f.upper() for f in (db.formats(book_id) or ())}
-            title = db.field_for('title', book_id) or str(book_id)
-            src_fmt = 'EPUB' if 'EPUB' in fmts else None
-            if src_fmt is None:
-                if not opts.convert:
-                    results.append(_skipped(title, 'no EPUB format (use --convert)',
-                                            book_id=book_id))
-                    continue
-                src_fmt = jobs.pick_source(fmts, opts.from_format)
-                if src_fmt is None:
-                    results.append(_skipped(title, 'no convertible format', book_id=book_id))
-                    continue
-            elif opts.convert and opts.from_format:
-                src_fmt = jobs.pick_source(fmts, opts.from_format)
-
-            converting = src_fmt != 'EPUB'
-            tmpdir = tempfile.mkdtemp(prefix='eplf-cli-')
+        for n, book_id in enumerate(ids, 1):
             try:
-                work = os.path.join(tmpdir, 'book.epub')
-                job = dict(ctx['job'], path=work, title=title, book_id=book_id)
-                if converting:
-                    src = os.path.join(tmpdir, 'source.' + src_fmt.lower())
-                    db.copy_format_to(book_id, src_fmt, src)
-                    job['convert_from'] = src
-                    job['recommendations'] = _library_metadata(db, book_id, out)
-                    before = None
-                else:
-                    db.copy_format_to(book_id, 'EPUB', work)
-                    before = _digest(work)
-                    if opts.report:
-                        job['path'] = work
-
-                result = run_one(job, opts, out)
-                result['source'] = '%s (#%d)' % (title, book_id)
-
-                if opts.report or opts.dry_run or result.get('error'):
-                    results.append(result)
-                    continue
-
-                changed = converting or (os.path.exists(work) and _digest(work) != before)
-                result['changed_on_disk'] = changed
-                if changed:
-                    try:
-                        # the same call calibre's Polish action makes, so Restore original works
-                        db.save_original_format(book_id, 'EPUB')
-                    except Exception:                          # noqa: BLE001 - no EPUB yet
-                        pass
-                    with open(work, 'rb') as f:
-                        db.add_format(book_id, 'EPUB', f, run_hooks=False)
-                    result['written'] = 'library #%d' % book_id
-                results.append(result)
-            finally:
-                shutil.rmtree(tmpdir, ignore_errors=True)
+                result = _one_book(db, book_id, ctx, opts, out)
+            except Exception:                                  # noqa: BLE001 - one book, not the run
+                result = _failed('#%s' % book_id, traceback.format_exc(), book_id=book_id)
+            results.append(result)
+            _emit(result, opts, out, n, len(ids))
         return results
     finally:
         try:
             library.close()
         except Exception:                                      # noqa: BLE001
             pass
+
+
+def _one_book(db, book_id, ctx, opts, out):
+    fmts = {f.upper() for f in (db.formats(book_id) or ())}
+    title = db.field_for('title', book_id) or str(book_id)
+    label = '%s (#%d)' % (title, book_id)
+
+    src_fmt = 'EPUB' if 'EPUB' in fmts else None
+    if src_fmt is None:
+        if not opts.convert:
+            return _skipped(label, 'no EPUB format (use --convert)', book_id=book_id)
+        src_fmt = jobs.pick_source(fmts, opts.from_format)
+        if src_fmt is None:
+            return _skipped(label, 'no convertible format', book_id=book_id)
+        if opts.report:
+            # the EPUB does not exist yet, and run_report only reads one
+            return _skipped(label, NO_REPORT, book_id=book_id)
+    elif opts.convert and opts.from_format:
+        src_fmt = jobs.pick_source(fmts, opts.from_format)
+        if src_fmt != 'EPUB' and opts.report:
+            return _skipped(label, NO_REPORT, book_id=book_id)
+
+    converting = src_fmt != 'EPUB'
+    tmpdir = tempfile.mkdtemp(prefix='eplf-cli-')
+    try:
+        work = os.path.join(tmpdir, 'book.epub')
+        job = dict(ctx['job'], path=work, title=title, book_id=book_id)
+        if converting:
+            src = os.path.join(tmpdir, 'source.' + src_fmt.lower())
+            db.copy_format_to(book_id, src_fmt, src)
+            job['convert_from'] = src
+            job['recommendations'] = _library_metadata(db, book_id, out)
+            before = None
+        else:
+            db.copy_format_to(book_id, 'EPUB', work)
+            before = _digest(work)
+
+        result = run_one(job, opts, out)
+        result['source'] = label
+
+        if opts.report or opts.dry_run or result.get('error'):
+            return result
+
+        changed = converting or (os.path.exists(work) and _digest(work) != before)
+        result['changed_on_disk'] = changed
+        if changed:
+            try:
+                # the same call calibre's Polish action makes, so Restore original works
+                db.save_original_format(book_id, 'EPUB')
+            except Exception:                                  # noqa: BLE001 - no EPUB yet
+                pass
+            with open(work, 'rb') as f:
+                db.add_format(book_id, 'EPUB', f, run_hooks=False)
+            result['written'] = 'library #%d' % book_id
+        return result
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _library_metadata(db, book_id, out):
@@ -445,11 +511,21 @@ def _library_metadata(db, book_id, out):
         return []
 
 
-def _skipped(source, reason, book_id=None):
-    d = jobs._as_dict(str(source), [], None, None)
+def _result(source, book_id=None, **extra):
+    """A result dict for a book that never reached the pipeline, shaped like one that did."""
+    d = jobs.as_dict(str(source), [], None, None)
     d.update({'source': str(source), 'title': os.path.basename(str(source)),
-              'skipped_reason': reason, 'book_id': book_id})
+              'book_id': book_id})
+    d.update(extra)
     return d
+
+
+def _skipped(source, reason, book_id=None):
+    return _result(source, book_id, skipped_reason=reason)
+
+
+def _failed(source, message, book_id=None):
+    return _result(source, book_id, error=message)
 
 
 # -- output -----------------------------------------------------------------------------
@@ -477,8 +553,56 @@ def _stages(result):
     return ', '.join(names) or 'the pipeline'
 
 
+def _emit(result, opts, out, n=None, total=None):
+    """Print one finished book, as it finishes.
+
+    Live rather than collected at the end: a run over a few hundred books that says nothing for
+    twenty minutes is indistinguishable from one that has hung.
+    """
+    if opts.as_json:
+        return                                                 # the whole run is dumped at the end
+    tag = '' if not total or total < 2 else '[%*d/%d] ' % (len(str(total)), n, total)
+
+    if result.get('skipped_reason'):
+        if not opts.quiet:
+            out.write('%sSKIP  %s: %s\n' % (tag, result['source'], result['skipped_reason']))
+        return
+    if result.get('error'):
+        out.write('%sFAIL  %s: %s\n'
+                  % (tag, result['source'], result['error'].strip().splitlines()[-1]))
+        return
+    if opts.quiet:
+        return
+
+    # only worth naming the destination when it is not the file we were handed
+    written = result.get('written')
+    where = '' if not written or written == result['source'] else ' -> %s' % written
+    if result.get('changed'):
+        verb = 'would fix' if (opts.report or opts.dry_run) else 'fixed'
+        out.write('%s  ok  %s: %s - %s%s\n'
+                  % (tag, result['source'], verb, _describe(result), where))
+    elif result.get('changed_on_disk'):
+        # the layout was already sound, but converting, polishing, upgrading or beautifying
+        # still rewrote the book, and that output is worth keeping
+        out.write('%s  ok  %s: no layout changes; rewritten by %s%s\n'
+                  % (tag, result['source'], _stages(result), where))
+    else:
+        out.write('%s  ok  %s: nothing to do\n' % (tag, result['source']))
+
+    if opts.verbose:
+        for entry in result.get('ledger', ()):
+            out.write('        %-7s %-14s %s%s\n'
+                      % (entry.get('action', ''), entry.get('category', ''), entry.get('page', ''),
+                         '  (%s)' % entry['reason'] if entry.get('reason') else ''))
+    for problem in result.get('problems', ()):
+        out.write('        !! %s\n' % problem)
+
+
 def report(results, opts, warnings, out):
-    """Print the run. -> the exit code."""
+    """Close the run off: the summary, or the whole thing as JSON. -> the exit code.
+
+    The per-book lines have already been printed by :func:`_emit` as each one finished.
+    """
     failed = [r for r in results if r.get('error')]
     needs = [r for r in results if r.get('changed') and not r.get('error')]
 
@@ -487,51 +611,21 @@ def report(results, opts, warnings, out):
                    'failed': len(failed), 'needing_work': len(needs)},
                   sys.stdout, indent=2, default=str)
         sys.stdout.write('\n')
-    else:
-        for r in results:
-            if r.get('skipped_reason'):
-                if not opts.quiet:
-                    out.write('SKIP  %s: %s\n' % (r['source'], r['skipped_reason']))
-                continue
-            if r.get('error'):
-                out.write('FAIL  %s: %s\n' % (r['source'], r['error'].strip().splitlines()[-1]))
-                continue
-            if opts.quiet:
-                continue
-            # only worth naming the destination when it is not the file we were handed
-            written = r.get('written')
-            where = '' if not written or written == r['source'] else ' -> %s' % written
-            if r.get('changed'):
-                verb = 'would fix' if (opts.report or opts.dry_run) else 'fixed'
-                out.write('  ok  %s: %s - %s%s\n' % (r['source'], verb, _describe(r), where))
-            elif r.get('changed_on_disk'):
-                # the layout was already sound, but converting, polishing, upgrading or
-                # beautifying still rewrote the book, and that output is worth keeping
-                out.write('  ok  %s: no layout changes; rewritten by %s%s\n'
-                          % (r['source'], _stages(r), where))
-            else:
-                out.write('  ok  %s: nothing to do\n' % r['source'])
-            if opts.verbose:
-                for entry in r.get('ledger', ()):
-                    out.write('        %-7s %-14s %s%s\n'
-                              % (entry.get('action', ''), entry.get('category', ''),
-                                 entry.get('page', ''),
-                                 '  (%s)' % entry['reason'] if entry.get('reason') else ''))
-            for problem in r.get('problems', ()):
-                out.write('        !! %s\n' % problem)
+    elif not opts.quiet:
+        noun = 'needing work' if (opts.report or opts.dry_run) else 'with layout repairs'
+        out.write('\n%d book(s), %d %s, %d failed\n'
+                  % (len(results), len(needs), noun, len(failed)))
+        written = [r for r in results if r.get('written')]
+        if written and not (opts.report or opts.dry_run):
+            out.write('%d file(s) written\n' % len(written))
+        if opts.dry_run:
+            out.write('dry run: nothing was written\n')
 
-        if not opts.quiet:
-            noun = 'needing work' if (opts.report or opts.dry_run) else 'with layout repairs'
-            out.write('\n%d book(s), %d %s, %d failed\n'
-                      % (len(results), len(needs), noun, len(failed)))
-            written = [r for r in results if r.get('written')]
-            if written and not (opts.report or opts.dry_run):
-                out.write('%d file(s) written\n' % len(written))
-            if opts.dry_run:
-                out.write('dry run: nothing was written\n')
-
-    for w in warnings:
-        out.write('warning: %s\n' % w)
+    if not opts.as_json:
+        # under --json they are already in the envelope, and repeating them afterwards puts
+        # loose text where a parser expects the document to end
+        for w in warnings:
+            out.write('warning: %s\n' % w)
 
     if failed:
         return 1
@@ -558,6 +652,9 @@ def main(argv=None, out=None):
         parser.error('--output-dir only applies to files, not to a library')
     if opts.backup and opts.output_dir:
         parser.error('--backup only applies when writing over the input')
+    if opts.backup and opts.library:
+        parser.error('--backup only applies to files; a library book keeps its ORIGINAL_EPUB, '
+                     'which calibre\'s "Restore original" reads')
 
     warnings = []
     settings = resolve_settings(opts, warnings)
@@ -574,11 +671,12 @@ def main(argv=None, out=None):
         if opts.library:
             results = process_library(opts, ctx, out)
         else:
-            files = collect_files(opts.paths, opts.recursive, warnings)
+            files = collect_files(opts.paths, opts.recursive, warnings,
+                                  jobs.SOURCE_PREFERENCE if opts.convert else ())
             if not files:
-                for w in warnings:
-                    out.write('warning: %s\n' % w)
-                out.write('no EPUB files found\n')
+                warnings.append('no books found')
+                # still goes through report(), so --json always produces parseable output
+                report([], opts, warnings, out)
                 return 2
             results = process_files(files, ctx, opts, out)
     except ValueError as e:

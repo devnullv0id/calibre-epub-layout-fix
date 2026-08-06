@@ -72,6 +72,8 @@ def check_usage():
     check('usage', code == 2, '--output-dir is refused in library mode')
     code, out = run(['--backup', '--output-dir', 'o', 'b.epub'])
     check('usage', code == 2, '--backup and --output-dir together are refused')
+    code, out = run(['--library', 'x', '--all', '--backup'])
+    check('usage', code == 2, '--backup is refused in library mode rather than ignored')
 
 
 def check_settings():
@@ -141,6 +143,33 @@ def check_collect(tmp):
     warnings = []
     cli.collect_files([os.path.join(tmp, 'nope')], False, warnings)
     check('collect', warnings, 'a missing path is a warning, not a crash')
+
+    # a directory scan must widen when --convert is on, or "--convert --recursive ~/Books" walks
+    # straight past every AZW3 in the library
+    from calibre_plugins.epub_layout_fix import jobs
+    mixed = os.path.join(tmp, 'mixed')
+    os.makedirs(mixed, exist_ok=True)
+    shutil.copy(os.path.join(books, 'anchors.epub'), os.path.join(mixed, 'kept.epub'))
+    with open(os.path.join(mixed, 'other.mobi'), 'wb') as f:
+        f.write(b'not really a mobi')
+    plain = cli.collect_files([mixed], False, warnings)
+    check('collect', [os.path.basename(f) for f in plain] == ['kept.epub'],
+          'without --convert a directory still yields EPUBs only: %r'
+          % [os.path.basename(f) for f in plain])
+    wide = cli.collect_files([mixed], False, warnings, jobs.SOURCE_PREFERENCE)
+    check('collect', sorted(os.path.basename(f) for f in wide) == ['kept.epub', 'other.mobi'],
+          'with --convert it yields the convertible formats too: %r'
+          % sorted(os.path.basename(f) for f in wide))
+
+    # and a convertible file must not be allowed to convert over the EPUB sitting next to it
+    shutil.copy(os.path.join(books, 'anchors.epub'), os.path.join(mixed, 'twin.epub'))
+    with open(os.path.join(mixed, 'twin.azw3'), 'wb') as f:
+        f.write(b'x')
+    names = [os.path.basename(f) for f in cli.collect_files([mixed], False, warnings,
+                                                            jobs.SOURCE_PREFERENCE)]
+    check('collect', 'twin.epub' in names and 'twin.azw3' not in names,
+          'a twin.azw3 beside twin.epub is dropped: %r' % sorted(names))
+    shutil.rmtree(mixed, ignore_errors=True)
 
 
 def check_report(tmp):
@@ -226,11 +255,67 @@ def check_convert(tmp):
     check('convert', 'not an EPUB' in out, 'a non-EPUB is skipped unless asked: %s'
           % out.strip().splitlines()[0])
 
+    # --report only ever opens a zip, so a non-EPUB used to come back as "BadZipFile: File is not
+    # a zip file" - a failure about the reader, saying nothing about the book
+    code, out = run(['--report', '--convert', src])
+    check('convert', 'BadZipFile' not in out, '--report on a non-EPUB is not a zip error: %s'
+          % out.strip().splitlines()[0])
+    check('convert', '--dry-run' in out, 'it points at the mode that does work')
+    check('convert', code == 0, 'and it is a skip, not a failure (exit %s)' % code)
+
     code, out = run(['--convert', src])
     produced = os.path.join(tmp, 'books', 'plain.epub')
     check('convert', code == 0, 'exit 0 (got %s)' % code)
     check('convert', os.path.exists(produced), 'the EPUB is written next to the source')
     check('convert', os.path.exists(src), 'and the source is left in place')
+
+
+def check_robustness(tmp):
+    """One book's problem must cost that book, not the run."""
+    print('\n=== one bad book ===')
+    books = os.path.join(tmp, 'books')
+    work = os.path.join(tmp, 'rough')
+    os.makedirs(work, exist_ok=True)
+    good_a = os.path.join(work, 'a_good.epub')
+    bad = os.path.join(work, 'b_bad.epub')
+    good_b = os.path.join(work, 'c_good.epub')
+    shutil.copy(os.path.join(books, 'anchors.epub'), good_a)
+    shutil.copy(os.path.join(books, 'anchors.epub'), good_b)
+    with open(bad, 'wb') as f:
+        f.write(b'this is not an epub at all')
+
+    code, out = run([good_a, bad, good_b])
+    check('rough', code == 1, 'a failed book makes the run exit 1 (got %s)' % code)
+    check('rough', 'FAIL' in out, 'it is reported as a failure')
+    check('rough', out.count('  ok  ') == 2, 'and the books either side still ran:\n%s' % out)
+    check('rough', '2 book(s)' not in out and '3 book(s)' in out,
+          'the summary counts all three: %s'
+          % [l for l in out.splitlines() if 'book(s)' in l])
+
+    # a destination claimed twice would silently lose the first result
+    same = os.path.join(work, 'sub')
+    os.makedirs(same, exist_ok=True)
+    shutil.copy(os.path.join(books, 'cover.epub'), os.path.join(same, 'a_good.epub'))
+    outdir = os.path.join(tmp, 'collide')
+    code, out = run(['--output-dir', outdir, good_a, os.path.join(same, 'a_good.epub')])
+    check('rough', code == 1, 'a colliding output is a failure, not a silent overwrite (exit %s)'
+          % code)
+    check('rough', 'would overwrite' in out, 'and says which file claimed it: %s'
+          % [l for l in out.splitlines() if 'overwrite' in l])
+    check('rough', len(os.listdir(outdir)) == 1, 'exactly one file was written')
+
+    # --json has to stay parseable even when there is nothing to do
+    empty = os.path.join(tmp, 'empty')
+    os.makedirs(empty, exist_ok=True)
+    code, out = run(['--json', empty])
+    check('rough', code == 2, 'an empty directory is still exit 2 (got %s)' % code)
+    try:
+        data = json.loads(out[out.index('{'):])
+        ok = data['books'] == [] and data['warnings']
+    except Exception as e:                                     # noqa: BLE001
+        ok = False
+        out = str(e)
+    check('rough', ok, '--json still produces a parseable envelope: %s' % out.strip()[:120])
 
 
 def check_library(tmp):
@@ -260,6 +345,12 @@ def _check_library(lib, books, root):
             [(Metadata(title, ['Tester']), {'EPUB': os.path.join(books, name)})],
             add_duplicates=True)[0][0]
     empty = api.add_books([(Metadata('NoEpub', ['Tester']), {})], add_duplicates=True)[0][0]
+    # a book whose only format has to be converted first
+    txt = os.path.join(root, 'src.txt')
+    with open(txt, 'w', encoding='utf-8') as f:
+        f.write('Chapter One\n\nJust enough text.\n')
+    other = api.add_books([(Metadata('TextOnly', ['Tester']), {'TXT': txt})],
+                          add_duplicates=True)[0][0]
     api.backend.close()
 
     missing = os.path.join(root, 'not-a-library')
@@ -272,6 +363,14 @@ def _check_library(lib, books, root):
     check('library', code == 0, 'a report over the library runs (exit %s)' % code)
     check('library', 'no EPUB format' in out, 'a book without an EPUB is skipped, not failed')
     check('library', out.count('would fix') == 2, 'both broken books are listed:\n%s' % out)
+
+    # the converting branch has no EPUB to analyse yet, so it must skip rather than report a
+    # FileNotFoundError about a temporary path the user has never heard of
+    code, out = run(['--library', lib, '--ids', str(other), '--report', '--convert'])
+    check('library', code == 0 and 'FAIL' not in out,
+          '--report --convert skips a book that has no EPUB yet (exit %s): %s'
+          % (code, out.strip().splitlines()[0]))
+    check('library', '--dry-run' in out, 'and points at the mode that does work')
 
     code, out = run(['--library', lib, '--search', 'title:Cover', '--report'])
     check('library', out.count('would fix') == 1, '--search narrows it to one: %s'
@@ -310,6 +409,7 @@ def main():
         check_fix_in_place(tmp)
         check_output_dir(tmp)
         check_convert(tmp)
+        check_robustness(tmp)
         check_library(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

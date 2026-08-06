@@ -160,7 +160,7 @@ def process_book(path, settings, polish_ops=None, target_version='3',
             ok, msg = convert_to_epub(convert_from, path, recommendations, log, target_version)
             steps.append(('convert', ok, msg))
             if not ok:
-                return _as_dict(path, steps, None, 'conversion failed: %s' % msg)
+                return as_dict(path, steps, None, 'conversion failed: %s' % msg)
 
         if polish_ops:
             step(0.55, _('Polishing'))
@@ -186,12 +186,14 @@ def process_book(path, settings, polish_ops=None, target_version='3',
         steps.append(('fix', not result.error and not result.problems,
                       result.error or '; '.join(result.problems)))
         step(1.0, _('nothing saved') if prefix else _('Done'))
-        return _as_dict(path, steps, result, result.error)
+        return as_dict(path, steps, result, result.error)
     except Exception:                                          # noqa: BLE001
-        return _as_dict(path, steps, None, traceback.format_exc())
+        return as_dict(path, steps, None, traceback.format_exc())
 
 
-def _as_dict(path, steps, result, error):
+def as_dict(path, steps, result, error):
+    """The result shape every caller sees. Public: the command line builds one for a book
+    that never reached the pipeline, so a skip and a run report the same way."""
     d = {
         'path': path,
         'name': os.path.basename(path),
@@ -230,7 +232,7 @@ def run_report(job, notifications=None, abort=None, log=None):
     """
     _notify(notifications, 0.1, _('Examining'))
     result = fixer.analyze_epub(job['path'], job['settings'])
-    res = _as_dict(job['path'], [('report', not result.error, result.error or '')],
+    res = as_dict(job['path'], [('report', not result.error, result.error or '')],
                    result, result.error)
     res['book_id'] = job.get('book_id')
     res['title'] = job.get('title') or os.path.basename(job['path'])
@@ -261,7 +263,7 @@ def run_single(job, notifications=None, abort=None, log=None):
 
     _notify(notifications, 0.01, prefix + _('Starting'))
     if abort is not None and abort.is_set():
-        return _as_dict(job['path'], [], None, 'cancelled')
+        return as_dict(job['path'], [], None, 'cancelled')
 
     def progress(frac, msg):
         _notify(notifications, frac, msg)

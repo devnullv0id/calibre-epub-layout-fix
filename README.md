@@ -295,6 +295,16 @@ calibre-debug -r "EPUB Layout Fix" -- --recursive --backup ~/Books
 calibre-debug -r "EPUB Layout Fix" -- --convert --output-dir out/ *.azw3
 ```
 
+A directory gives up its EPUBs. With `--convert` it also gives up the formats the plugin converts
+from — KFX, AZW3, MOBI, AZW, KEPUB, DOCX, FB2, PDF — except where an EPUB of the same name is
+sitting beside them, since converting `book.azw3` over the `book.epub` next to it is never what
+was meant. A file named directly on the command line is always taken as given, whatever its
+extension.
+
+`--report` only examines EPUBs: it reads the book and writes nothing, so there is no converted
+file for it to look at. Use `--dry-run` for a non-EPUB — it converts into a temporary copy, runs
+the whole pipeline, and keeps none of it.
+
 Or books in a library, selected by search, by id, or all of them. Results are written back with
 the usual `ORIGINAL_EPUB` backup, so **Restore original** still works:
 
@@ -308,10 +318,13 @@ and so on — and each defaults to whatever is saved in calibre. `--defaults` ig
 configuration entirely, which is what you want in a script that has to behave the same on every
 machine.
 
-`--json` prints the full result of each book, ledger included, for feeding into something else.
-Exit status is 0 when nothing failed, 1 when a book failed, 2 for a bad command line, and 3 when
-`--fail-on-change` was given and a book needs work — enough for a CI job that fails when a title
-lands in the library unrepaired.
+Each book is reported as it finishes, prefixed `[n/total]`, so a long run shows where it is. One
+book failing costs that book and nothing else: the run carries on and the summary counts it.
+
+`--json` prints the full result of each book, ledger included, on stdout with the diagnostics kept
+on stderr. Exit status is 0 when nothing failed, 1 when a book failed, 2 for a bad command line,
+and 3 when `--fail-on-change` was given and a book needs work — enough for a CI job that fails when
+a title lands in the library unrepaired.
 
 Two deliberate differences from the buttons:
 

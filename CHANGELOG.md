@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed the file rather than only when the layout fix did — otherwise `--convert book.mobi`
   would produce nothing for a book whose layout was already sound.
 
+  Books are reported as they finish, prefixed `[n/total]`, and one book's failure costs that book
+  rather than the run: a locked file three hundred books into a library pass no longer takes down
+  every result already collected. Two inputs whose output would land on the same path fail with
+  the name of the file that claimed it instead of silently overwriting. `--report` skips a
+  non-EPUB with a note pointing at `--dry-run`, rather than reporting the `BadZipFile` its zip
+  reader raised. With `--convert` a directory scan takes the convertible formats too — except
+  where an EPUB of the same name sits beside them.
+
 - `tests/test_cli.py`, driving all of the above through `cli.main` against real books and a
   throwaway library.
 
