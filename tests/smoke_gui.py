@@ -80,6 +80,23 @@ def main():
         assert rows[0][1] == 'p1.xhtml' and rows[0][3] == 'full-page-image', rows[0]
     check('ReportDialog builds and flattens', build_report_dialog)
 
+    def csv_is_not_a_formula():
+        """Every exported field is book text, so it is whatever the EPUB said.
+
+        Excel and LibreOffice evaluate a cell starting with =, +, - or @, which makes a book
+        titled "=cmd|'/c calc'!A1" run when the report is opened.
+        """
+        from calibre_plugins.epub_layout_fix.report_dialog import ReportDialog
+        for hostile in ("=cmd|'/c calc'!A1", '+1234', '-5', '@SUM(1+1)', '\tx', '\rx'):
+            got = ReportDialog._csv_safe(hostile)
+            assert got.startswith("'"), 'not neutralised: %r -> %r' % (hostile, got)
+            assert got[1:] == hostile, 'text was altered: %r -> %r' % (hostile, got)
+        for ordinary in ('Normal Title', 'a=b', '', '1200'):
+            assert ReportDialog._csv_safe(ordinary) == ordinary, ordinary
+        assert ReportDialog._csv_safe(None) == '', 'None becomes empty, not "None"'
+        assert ReportDialog._csv_safe(1200) == '1200', 'numbers survive as text'
+    check('CSV export cannot smuggle a spreadsheet formula', csv_is_not_a_formula)
+
     def polish_ops():
         ops = panel.polish_operations()
         assert ops, 'no polish operations discovered'

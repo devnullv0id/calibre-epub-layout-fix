@@ -122,6 +122,19 @@ class ReportDialog(QDialog):
                             e.get('height') or '', e.get('reason', '')])
         return out
 
+    @staticmethod
+    def _csv_safe(value):
+        """Stop a spreadsheet treating book text as a formula.
+
+        Every field here comes out of an EPUB - the title, the page name, the reason - so it is
+        whatever the file said. Excel and LibreOffice evaluate a cell beginning with ``=``, ``+``,
+        ``-`` or ``@``, which turns a book titled ``=cmd|'/c calc'!A1`` into code that runs when
+        the exported report is opened. Prefixing with an apostrophe is the usual fix: spreadsheets
+        drop it and treat the rest as text.
+        """
+        s = '' if value is None else str(value)
+        return "'" + s if s[:1] in ('=', '+', '-', '@', '\t', '\r') else s
+
     def export_csv(self):
         import csv
 
@@ -135,7 +148,7 @@ class ReportDialog(QDialog):
                 writer = csv.writer(f)
                 writer.writerow(['book', 'page', 'action', 'category', 'width', 'height',
                                  'reason'])
-                writer.writerows(self.rows())
+                writer.writerows([self._csv_safe(c) for c in row] for row in self.rows())
         except OSError as e:
             return error_dialog(self, _('Could not save'), str(e), show=True)
         info_dialog(self, _('Saved'), _('%(n)d row(s) written to %(p)s')
