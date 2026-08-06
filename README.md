@@ -306,7 +306,8 @@ file for it to look at. Use `--dry-run` for a non-EPUB — it converts into a te
 the whole pipeline, and keeps none of it.
 
 Or books in a library, selected by search, by id, or all of them. Results are written back with
-the usual `ORIGINAL_EPUB` backup, so **Restore original** still works:
+the usual `ORIGINAL_EPUB` backup, so **Restore original** still works. **Close calibre first** —
+it holds the library in memory, so it will not see the changes and may write over them:
 
 ```
 calibre-debug -r "EPUB Layout Fix" -- --library ~/Calibre --search "formats:EPUB" --report
@@ -326,13 +327,22 @@ on stderr. Exit status is 0 when nothing failed, 1 when a book failed, 2 for a b
 and 3 when `--fail-on-change` was given and a book needs work — enough for a CI job that fails when
 a title lands in the library unrepaired.
 
-Two deliberate differences from the buttons:
+Differences from the buttons, all deliberate:
 
 - Books are processed on a copy and only moved over the original once every stage has succeeded,
   so an interrupted run cannot leave a half-polished file behind.
-- The output is kept whenever *any* stage changed the file, not only when the layout fix did.
-  `--convert book.mobi` producing nothing because the book happened to need no layout repair
-  would simply be wrong from a command line.
+- A result is kept when the layout fix changed something, when a conversion produced a book that
+  did not exist before, or when a rewriting stage was asked for by name (`--polish`,
+  `--beautify`). Not merely because a stage touched the bytes: polish rewrites a book every time
+  it runs, so keying off that would rewrite every book on every pass — and in a library, replace
+  each book's `ORIGINAL_EPUB` with the previous run's output until the real original was gone.
+  Running twice over the same books now changes nothing the second time.
+- `ORIGINAL_EPUB` is only written when there isn't one already. calibre overwrites it, which is
+  right for a one-off polish and wrong for a command that may be run on a schedule.
+- Polish runs without *Embed referenced fonts* and *Download external resources*, whatever the
+  conversion window has saved. The first copies fonts off this machine into the book, the second
+  fetches remote URLs, and neither belongs in something running unattended — the same reasoning
+  that already excludes them from automatic runs on import.
 
 ## Undo
 

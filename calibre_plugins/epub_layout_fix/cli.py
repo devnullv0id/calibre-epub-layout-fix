@@ -9,13 +9,15 @@ Everything here runs headless: no QApplication, no toolbar, no job queue. The wo
 :func:`jobs.process_book`, the very function the toolbar buttons run, so a book repaired from a
 script and a book repaired from the button come out identical.
 
-Two things it does deliberately differently from the GUI:
+Books are always processed on a copy and only moved over the original once every stage has
+succeeded, so an interrupted run cannot leave a half-polished file behind.
 
-* Books are always processed on a copy and only moved over the original once every stage has
-  succeeded, so an interrupted run cannot leave a half-polished file behind.
-* The output is kept when *any* stage changed the file, not only when the layout fix did. From a
-  command line, ``--convert book.mobi`` producing nothing because the book happened to need no
-  layout repair would simply be wrong.
+A result is kept when the layout fix changed something, when a conversion produced a book that did
+not exist before, or when a rewriting stage was asked for by name (``--polish``, ``--beautify``).
+Not merely because a stage touched the bytes: polish rewrites a book every time it runs, and a
+command line that wrote every book on every pass would churn a library forever - and, worse,
+replace each book's ``ORIGINAL_EPUB`` with the previous run's output until the real original was
+gone.
 """
 
 from __future__ import annotations
@@ -107,7 +109,9 @@ def build_parser():
     mode.add_argument('--fail-on-change', action='store_true',
                       help='exit 3 if any book needs work (for scripts and CI)')
 
-    lib = p.add_argument_group('library mode', 'work on books in a calibre library')
+    lib = p.add_argument_group('library mode',
+                               'work on books in a calibre library. Close calibre first: it '
+                               'keeps the library in memory and will not see these changes.')
     lib.add_argument('--library', metavar='PATH', help='path to the calibre library folder')
     lib.add_argument('--search', metavar='QUERY',
                      help='a calibre search expression selecting the books')
@@ -173,6 +177,16 @@ def _saved(name, fallback, warnings):
         return fallback
 
 
+def _saved_polish(warnings):
+    """The saved polish operations, minus the ones that reach off the machine."""
+    try:
+        from calibre_plugins.epub_layout_fix import config
+        return config.polish_settings(automatic=True)
+    except Exception as e:                                     # noqa: BLE001
+        warnings.append('could not read the saved polish settings (%s); skipping polish' % e)
+        return False, {}
+
+
 def resolve_settings(opts, warnings):
     """The engine settings: the saved ones, then whatever the command line overrode."""
     if opts.defaults:
@@ -187,11 +201,18 @@ def resolve_settings(opts, warnings):
 
 
 def resolve_pipeline(opts, warnings):
-    """-> ``(polish_ops or None, target_version, beautify)``."""
+    """-> ``(polish_ops or None, target_version, beautify)``.
+
+    The polish operations come back as they do for an automatic run, not as the conversion window
+    left them. "Embed referenced fonts" copies matching fonts off this computer into the book and
+    "Download external resources" fetches remote URLs; ``config.AUTO_POLISH_EXCLUDED`` already
+    rules both out of anything that fires unattended, and a command line in a script is exactly
+    that. calibre's own Polish tool is there for anyone who wants them.
+    """
     if opts.defaults:
         polish_on, polish_ops, beautify, version = False, {}, False, '3'
     else:
-        polish_on, polish_ops = _saved('polish_settings', (False, {}), warnings)
+        polish_on, polish_ops = _saved_polish(warnings)
         beautify = _saved('beautify_enabled', False, warnings)
         version = _saved('target_epub_version', '3', warnings)
 
@@ -286,6 +307,25 @@ def _digest(path):
         for block in iter(lambda: f.read(1 << 20), b''):
             h.update(block)
     return h.hexdigest()
+
+
+def _worth_keeping(result, converting, work, before, ctx):
+    """Is there an output here that should replace what was there before?
+
+    Byte-difference alone is not the test. calibre's polish rewrites a book every time it runs,
+    so a command line keying off the bytes would rewrite every book on every pass - and in a
+    library that means ``save_original_format`` replacing the pristine ``ORIGINAL_EPUB`` with the
+    last run's output, over and over, until the real original is gone. Measured: three passes left
+    ``ORIGINAL_EPUB`` holding the output of pass two.
+
+    So the reasons to keep something are the deliberate ones: the layout fix did something, or the
+    book did not exist until this run converted it, or the user named a stage whose whole purpose
+    is to rewrite. Even then the bytes still have to differ, so a polish that changed nothing does
+    not cost the book its original.
+    """
+    if not (converting or result.get('changed') or ctx['keep_rewrites']):
+        return False
+    return bool(converting or (os.path.exists(work) and _digest(work) != before))
 
 
 def _log_for(opts):
@@ -385,14 +425,17 @@ def _one_file(path, ctx, opts, out, claimed):
         if opts.report or opts.dry_run or result.get('error'):
             return result
 
-        # Any stage may have changed the book, not only the layout fix, so the file itself
-        # is the authority on whether there is something worth keeping.
-        changed = converting or (os.path.exists(work) and _digest(work) != before)
+        changed = _worth_keeping(result, converting, work, before, ctx)
         result['changed_on_disk'] = changed
         if changed:
+            # An existing .bak is from an earlier run and is therefore closer to the original
+            # than anything this one could save. Leave it alone.
             if opts.backup and final == path and os.path.exists(path):
-                shutil.copy2(path, path + '.bak')
-                result['backup'] = path + '.bak'
+                if os.path.exists(path + '.bak'):
+                    result['backup'] = path + '.bak (kept from an earlier run)'
+                else:
+                    shutil.copy2(path, path + '.bak')
+                    result['backup'] = path + '.bak'
             d = os.path.dirname(final)
             if d and not os.path.isdir(d):
                 os.makedirs(d)
@@ -473,14 +516,17 @@ def _one_book(db, book_id, ctx, opts, out):
         if opts.report or opts.dry_run or result.get('error'):
             return result
 
-        changed = converting or (os.path.exists(work) and _digest(work) != before)
+        changed = _worth_keeping(result, converting, work, before, ctx)
         result['changed_on_disk'] = changed
         if changed:
-            try:
-                # the same call calibre's Polish action makes, so Restore original works
-                db.save_original_format(book_id, 'EPUB')
-            except Exception:                                  # noqa: BLE001 - no EPUB yet
-                pass
+            # The same call calibre's Polish action makes, so Restore original works - but only
+            # when there is nothing saved yet. calibre overwrites, and an ORIGINAL_EPUB from an
+            # earlier run is the one worth keeping.
+            if 'ORIGINAL_EPUB' not in {f.upper() for f in (db.formats(book_id) or ())}:
+                try:
+                    db.save_original_format(book_id, 'EPUB')
+                except Exception:                              # noqa: BLE001 - no EPUB yet
+                    pass
             with open(work, 'rb') as f:
                 db.add_format(book_id, 'EPUB', f, run_hooks=False)
             result['written'] = 'library #%d' % book_id
@@ -656,16 +702,41 @@ def main(argv=None, out=None):
         parser.error('--backup only applies to files; a library book keeps its ORIGINAL_EPUB, '
                      'which calibre\'s "Restore original" reads')
 
+    # Flags that cannot do anything in the mode they were given with. Accepting them silently is
+    # how someone ends up believing a --dry-run wrote something to --output-dir.
+    if (opts.report or opts.dry_run) and (opts.backup or opts.output_dir):
+        parser.error('--backup and --output-dir write files, which %s never does'
+                     % ('--report' if opts.report else '--dry-run'))
+    if opts.fail_on_change and not (opts.report or opts.dry_run):
+        parser.error('--fail-on-change reports books that still need work, so it belongs with '
+                     '--report or --dry-run; after a real run they have been repaired')
+
+    if opts.output_dir and os.path.exists(opts.output_dir) and not os.path.isdir(opts.output_dir):
+        parser.error('--output-dir is not a directory: %s' % opts.output_dir)
+    if opts.min_width_percent is not None:
+        v = opts.min_width_percent
+        if not (0 <= v <= 100):                                # also rejects nan, which fails both
+            parser.error('--min-width must be a percentage between 0 and 100, not %r' % v)
+    if opts.cover_color is not None:
+        import re
+        if not re.match(r'^#[0-9A-Fa-f]{6}$', opts.cover_color):
+            # the settings panel silently corrects this to #000000; a command line should say so
+            parser.error('--cover-color must look like #RRGGBB, not %r' % opts.cover_color)
+
     warnings = []
     settings = resolve_settings(opts, warnings)
     polish_ops, version, beautify = resolve_pipeline(opts, warnings)
-    ctx = {'job': {
-        'settings': settings,
-        'polish_ops': polish_ops,
-        'target_version': version,
-        'beautify': beautify,
-        'dry_run': bool(opts.dry_run),
-    }}
+    ctx = {
+        'job': {
+            'settings': settings,
+            'polish_ops': polish_ops,
+            'target_version': version,
+            'beautify': beautify,
+            'dry_run': bool(opts.dry_run),
+        },
+        # asked for by name on this run, so its output is the point rather than preparation
+        'keep_rewrites': opts.polish is True or opts.beautify is True,
+    }
 
     try:
         if opts.library:

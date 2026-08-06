@@ -48,6 +48,9 @@ def digest(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
+_sha = digest
+
+
 def fixtures(tmp):
     subprocess.run([sys.executable, os.path.join(HERE, 'make_fixtures.py')],
                    check=True, capture_output=True, cwd=HERE)
@@ -74,6 +77,27 @@ def check_usage():
     check('usage', code == 2, '--backup and --output-dir together are refused')
     code, out = run(['--library', 'x', '--all', '--backup'])
     check('usage', code == 2, '--backup is refused in library mode rather than ignored')
+
+    # flags that cannot do anything in the mode they were given with. Accepting them silently is
+    # how someone ends up believing a --dry-run wrote something to --output-dir.
+    for args, why in ((['--report', '--backup', 'b.epub'], '--report --backup'),
+                      (['--dry-run', '--output-dir', 'o', 'b.epub'], '--dry-run --output-dir'),
+                      (['--fail-on-change', 'b.epub'], '--fail-on-change on a real run')):
+        code, out = run(args)
+        check('usage', code == 2, '%s is refused (got %s)' % (why, code))
+
+    # values the engine would otherwise take at face value
+    for bad in ('-1', '101', 'nan', 'inf'):
+        code, out = run(['--report', '--min-width', bad, 'b.epub'])
+        check('usage', code == 2, '--min-width %s is refused (got %s)' % (bad, code))
+    # b.epub does not exist, so this exits 2 either way - what matters is *which* complaint
+    code, out = run(['--report', '--min-width', '80', 'b.epub'])
+    check('usage', 'percentage' not in out, 'but --min-width 80 draws no complaint')
+    for bad in ('red', '#gggggg', '#12345', ''):
+        code, out = run(['--report', '--cover-color', bad, 'b.epub'])
+        check('usage', code == 2, '--cover-color %r is refused (got %s)' % (bad, code))
+    code, out = run(['--report', '--cover-color', '#1a2B3c', 'b.epub'])
+    check('usage', '#RRGGBB' not in out, 'but a real #RRGGBB draws none either')
 
 
 def check_settings():
@@ -114,6 +138,25 @@ def check_settings():
     check('settings', ops, '--polish gives it something to do: %r' % (ops,))
     check('settings', version == '2', '--epub-version reaches the pipeline')
     check('settings', beautify is True, '--beautify reaches the pipeline')
+
+    # "Embed referenced fonts" copies fonts off this machine into the book and "Download external
+    # resources" fetches remote URLs. config.AUTO_POLISH_EXCLUDED already rules both out of
+    # anything unattended, and a command line in a script is exactly that.
+    from calibre_plugins.epub_layout_fix.config import AUTO_POLISH_EXCLUDED, prefs
+    saved = dict(prefs.get('polish_ops') or {})
+    try:
+        prefs['polish_ops'] = {k: True for k in
+                               list(AUTO_POLISH_EXCLUDED) + ['remove_unused_css']}
+        prefs['polish_enabled'] = True
+        ops, _v, _b = cli.resolve_pipeline(parser.parse_args(['x.epub']), warnings)
+        leaked = sorted(k for k in AUTO_POLISH_EXCLUDED if (ops or {}).get(k))
+        check('settings', not leaked,
+              'the command line never runs %s: leaked %r'
+              % ('/'.join(sorted(AUTO_POLISH_EXCLUDED)), leaked))
+        check('settings', (ops or {}).get('remove_unused_css'),
+              'while the rest of the saved polish operations still come through')
+    finally:
+        prefs['polish_ops'] = saved
 
 
 def check_collect(tmp):
@@ -231,12 +274,50 @@ def check_fix_in_place(tmp):
     check('fix', 'nothing to do' in out, 'a second look finds nothing left: %s'
           % out.strip().splitlines()[0])
 
+    # ... and a second real run must not touch the file at all. Polish rewrites a book every time
+    # it runs, so a command line keying off the bytes churns a library forever.
+    settled = digest(book)
+    code, out = run([book])
+    check('fix', digest(book) == settled,
+          'a second real run leaves the file byte-identical: %s' % out.strip().splitlines()[0])
+    code, out = run([book])
+    check('fix', digest(book) == settled, 'and so does a third')
+
+    # an existing .bak is from an earlier run, so it is closer to the original than anything a
+    # later one could save
+    with open(bak, 'rb') as f:
+        first_backup = f.read()
+    fresh = os.path.join(tmp, 'books', 'pcthref2.epub')
+    shutil.copy(os.path.join(tmp, 'books', 'anchors.epub'), fresh)
+    run(['--backup', fresh])
+    run(['--backup', fresh])
+    with open(bak, 'rb') as f:
+        check('fix', f.read() == first_backup, 'the .bak from the first run is left alone')
+
+    # a stage asked for by name is meant to rewrite, so its output is kept even when the layout
+    # was already sound
+    plain = os.path.join(tmp, 'books', 'smallimg.epub')
+    run([plain])
+    settled = digest(plain)
+    code, out = run(['--beautify', plain])
+    check('fix', digest(plain) != settled,
+          '--beautify keeps its output on a book needing no layout repair: %s'
+          % out.strip().splitlines()[0])
+
 
 def check_output_dir(tmp):
     print('\n=== --output-dir ===')
     book = os.path.join(tmp, 'books', 'pcthref.epub')
     before = digest(book)
     outdir = os.path.join(tmp, 'out', 'nested')          # deliberately does not exist yet
+
+    notadir = os.path.join(tmp, 'books', 'plain-file')
+    open(notadir, 'w').close()
+    code, out = run(['--output-dir', notadir, book])
+    check('outdir', code == 2, 'an --output-dir that is a file is refused up front (got %s)'
+          % code)
+    check('outdir', 'FileExistsError' not in out and 'WinError' not in out,
+          'with a plain message, not an OS error: %s' % out.strip().splitlines()[-1][:90])
 
     code, out = run(['--output-dir', outdir, book])
     produced = os.path.join(outdir, 'pcthref.epub')
@@ -292,12 +373,17 @@ def check_robustness(tmp):
           'the summary counts all three: %s'
           % [l for l in out.splitlines() if 'book(s)' in l])
 
-    # a destination claimed twice would silently lose the first result
+    # A destination claimed twice would silently lose the first result. Both copies are fresh:
+    # good_a has already been repaired by the run above, and a book with nothing left to fix is
+    # not written at all, so it would never claim a destination to collide with.
     same = os.path.join(work, 'sub')
     os.makedirs(same, exist_ok=True)
-    shutil.copy(os.path.join(books, 'cover.epub'), os.path.join(same, 'a_good.epub'))
+    first = os.path.join(work, 'clash.epub')
+    second = os.path.join(same, 'clash.epub')
+    shutil.copy(os.path.join(books, 'cover.epub'), first)
+    shutil.copy(os.path.join(books, 'dangling.epub'), second)
     outdir = os.path.join(tmp, 'collide')
-    code, out = run(['--output-dir', outdir, good_a, os.path.join(same, 'a_good.epub')])
+    code, out = run(['--output-dir', outdir, first, second])
     check('rough', code == 1, 'a colliding output is a failure, not a silent overwrite (exit %s)'
           % code)
     check('rough', 'would overwrite' in out, 'and says which file claimed it: %s'
@@ -392,6 +478,29 @@ def _check_library(lib, books, root):
 
     code, out = run(['--library', lib, '--all', '--report'])
     check('library', 'would fix' not in out, 'and a second report finds nothing left:\n%s' % out)
+
+    # The one that matters. calibre's save_original_format overwrites, so a run that writes on
+    # every pass replaces ORIGINAL_EPUB with the previous pass's output until the real original
+    # is gone - measured at three passes before this was fixed.
+    api = open_library(lib).new_api
+    pristine = {t: _sha(api.format_abspath(i, 'ORIGINAL_EPUB')) for t, i in ids.items()}
+    settled = {t: _sha(api.format_abspath(i, 'EPUB')) for t, i in ids.items()}
+    api.backend.close()
+
+    for pass_no in (2, 3):
+        run(['--library', lib, '--all', '-q'])
+    api = open_library(lib).new_api
+    try:
+        now_orig = {t: _sha(api.format_abspath(i, 'ORIGINAL_EPUB')) for t, i in ids.items()}
+        now_epub = {t: _sha(api.format_abspath(i, 'EPUB')) for t, i in ids.items()}
+    finally:
+        api.backend.close()
+    check('library', now_orig == pristine,
+          'two further passes leave ORIGINAL_EPUB pristine: %r'
+          % {t: 'kept' if now_orig[t] == pristine[t] else 'REPLACED' for t in pristine})
+    check('library', now_epub == settled,
+          'and the books themselves are untouched: %r'
+          % {t: 'same' if now_epub[t] == settled[t] else 'REWRITTEN' for t in settled})
 
 
 def main():

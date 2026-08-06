@@ -18,10 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result including the ledger, and the exit status distinguishes failure (1), a bad command line
   (2) and, with `--fail-on-change`, books that need work (3).
 
-  It differs from the buttons in two deliberate ways: books are processed on a copy and only moved
-  over the original once every stage has succeeded, and the output is kept whenever any stage
-  changed the file rather than only when the layout fix did — otherwise `--convert book.mobi`
-  would produce nothing for a book whose layout was already sound.
+  It differs from the buttons deliberately: books are processed on a copy and only moved over the
+  original once every stage has succeeded; a result is kept when the layout fix changed something,
+  when a conversion produced a book that did not exist before, or when a rewriting stage was named
+  on the command line; `ORIGINAL_EPUB` is only written when there is not one already; and polish
+  runs without *Embed referenced fonts* or *Download external resources*, which reach off the
+  machine and have no place in something running unattended.
 
   Books are reported as they finish, prefixed `[n/total]`, and one book's failure costs that book
   rather than the run: a locked file three hundred books into a library pass no longer takes down
@@ -30,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-EPUB with a note pointing at `--dry-run`, rather than reporting the `BadZipFile` its zip
   reader raised. With `--convert` a directory scan takes the convertible formats too — except
   where an EPUB of the same name sits beside them.
+
+  An adversarial sweep of the finished command line — bad values, damaged books, hostile paths,
+  repeated runs — turned up the rest: `--min-width` accepted `nan` (which silently matched
+  nothing) and values outside 0–100; `--cover-color` accepted anything at all and injected it into
+  the stylesheet, where the settings panel would have corrected it to `#000000`; `--output-dir`
+  pointing at an existing file surfaced a raw `FileExistsError`; and `--backup`, `--output-dir`
+  and `--fail-on-change` were accepted in modes that cannot act on them. `--backup` also replaced
+  an existing `.bak`, discarding the copy closest to the original. All are now refused or
+  corrected.
 
 - `tests/test_cli.py`, driving all of the above through `cli.main` against real books and a
   throwaway library.
