@@ -194,7 +194,13 @@ def main():
                     help='close calibre, build, install, then start calibre again')
     ap.add_argument('--check-version', metavar='TAG',
                     help='fail unless PLUGIN_VERSION matches TAG, then exit')
+    ap.add_argument('--print-version', action='store_true',
+                    help='print PLUGIN_VERSION as x.y.z and exit')
     args = ap.parse_args()
+
+    if args.print_version:
+        print(plugin_version())
+        return 0
 
     if args.check_version:
         return check_version(args.check_version)

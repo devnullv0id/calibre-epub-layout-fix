@@ -11,8 +11,19 @@ python build.py --restart                         # close calibre, build, instal
 Use `--restart` while developing. calibre gets closed first because it writes its stale in-memory
 plugin list back on exit, which silently undoes an install made while it was open.
 
-Every push builds the zip in CI. The artifact is attached to each run, and to the release for a
-`v*` tag. `build.py --check-version` fails the build if the tag and `PLUGIN_VERSION` disagree.
+## Releasing
+
+Bump `PLUGIN_VERSION` in `calibre_plugins/epub_layout_fix/action_base.py`, update the changelog,
+and push to main. That is the whole release process: CI reads the version, and if no tag matches
+it yet, creates the tag at that commit and publishes a release with the zip attached. Pushing
+again without a bump publishes nothing, so ordinary commits are safe.
+
+There is no `latest` tag to maintain. GitHub resolves `/releases/latest` to the newest
+non-prerelease release on its own, which is the link the README points at.
+
+Every push also uploads the zip as a run artifact, released or not, so the newest build is always
+downloadable from the Actions tab. `build.py --check-version` still guards a tag pushed by hand
+against a mismatched `PLUGIN_VERSION`.
 
 ## Tests
 

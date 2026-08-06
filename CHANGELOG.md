@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-08-06
+
 ### Added
 
 - **A command line**, through calibre's plugin CLI hook:
@@ -25,23 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   machine. See the README for the rest.
 
 - `tests/test_cli.py`, covering the above against real books and a throwaway library.
-
-### Fixed
-
-- The red pin never appeared in the row margin. calibre's icon cache maps a label to a
-  `(colour, QIcon)` pair; a bare icon there made `marked_text_icon_for` raise inside `headerData`,
-  which cost every row its pin while leaving the marks intact, so `marked:needs-fix` found the
-  books and nothing showed. The test fake had no such attribute, so the failed seeding was
-  swallowed and the suite stayed green. It now models the real shape.
-
-### Changed
-
-- Filtering the library down to the flagged books is now offered rather than done: the question
-  comes after the summary, defaults to no, and carries calibre's *Ask this again* checkbox.
-
-## [0.2.0] - 2026-08-05
-
-### Added
 
 - **A dry run.** Runs the whole pipeline on a temporary copy and discards the result instead of
   saving it: nothing in the library changes and no `ORIGINAL_EPUB` backup is made. Unlike the
@@ -99,10 +86,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a dead `page_styles1.css` link in some books.
 - `python build.py --restart` closes calibre, builds, installs and starts calibre again.
   `--check-version` guards a release tag against a mismatched `PLUGIN_VERSION`.
-- A GitHub Actions workflow that runs the engine suite, builds the zip on every push, and attaches
-  it to the release for a `v*` tag.
+- A GitHub Actions workflow that runs the engine suite and builds the zip on every push. Releases
+  follow `PLUGIN_VERSION`: a version with no tag yet gets one, with the zip attached. Bumping the
+  version in `action_base.py` is the release action, so a tag can never name a version the zip
+  disagrees with, and GitHub's own `/releases/latest` stays pointed at the newest one.
 
 ### Fixed
+
+- The red pin never appeared in the row margin. calibre's icon cache maps a label to a
+  `(colour, QIcon)` pair; a bare icon there made `marked_text_icon_for` raise inside `headerData`,
+  which cost every row its pin while leaving the marks intact, so `marked:needs-fix` found the
+  books and nothing showed. The test fake had no such attribute, so the failed seeding was
+  swallowed and the suite stayed green. It now models the real shape.
 
 - **The library's metadata reached the converted book.** The conversion wrapper passed no metadata,
   so the output kept whatever the source file had embedded: authors appeared in sort form and, on
@@ -135,6 +130,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_library.py` now drives the toolbar action's own path against a real library — job
   spec, worker, write-back, backup, view refresh and temporary-file cleanup — with a stubbed main
   window.
+
+### Changed
+
+- Filtering the library down to the flagged books is now offered rather than done: the question
+  comes after the summary, defaults to no, and carries calibre's *Ask this again* checkbox.
 
 ### Removed
 
