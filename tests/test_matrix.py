@@ -189,15 +189,26 @@ def run_matrix(book, workdir):
                                       fixer.find_opf(zipfile.ZipFile(book),
                                                      [i.filename for i in
                                                       zipfile.ZipFile(book).infolist()]))
-        body_rewrites = [n for n, t in txt.items()
-                         if 'div class="fullpage"' in t and n != cover]
+        # What matters is what this run *added*, not what the book already had. A book that has
+        # been through the plugin before carries these markers in its input, and hand a real
+        # library to EPLF_BOOKS and most of it will have. Comparing against the output alone
+        # reported every already-fixed book as a settings failure.
+        def marked(source, needle, skip=None):
+            return {n for n, t in source.items() if needle in t and n != skip}
+
+        added_pages = (marked(txt, 'div class="fullpage"', cover)
+                       - marked(src, 'div class="fullpage"', cover))
+        added_cover = marked(txt, fixer.COVER_MARKER) - marked(src, fixer.COVER_MARKER)
+        # the anchor check below wants the pages this run built, for the same reason
+        body_rewrites = sorted(added_pages)
 
         if overrides.get('fix_images') is False:
-            check('setting', not body_rewrites,
-                  '%s/%s: no content page rewritten (%s)' % (name, label, body_rewrites[:3]))
+            check('setting', not added_pages,
+                  '%s/%s: no content page rewritten (%s)'
+                  % (name, label, sorted(added_pages)[:3]))
         if overrides.get('fix_covers') is False:
-            check('setting', all(fixer.COVER_MARKER not in t for t in txt.values()),
-                  '%s/%s: the cover is left alone' % (name, label))
+            check('setting', not added_cover,
+                  '%s/%s: the cover is left alone (%s)' % (name, label, sorted(added_cover)[:3]))
             check('setting', not res.cover_fixed, '%s/%s: cover_fixed stays false' % (name, label))
         if overrides.get('dark_cover') is False and cover:
             marked = [t for t in txt.values() if fixer.COVER_MARKER in t]
