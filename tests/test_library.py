@@ -393,6 +393,36 @@ def check_action_end_to_end(legacy_db, book_id, tmp):
                               'error': None, 'name': 'x'}])
         check('action2', not os.path.exists(path3),
               'an unchanged book still has its temp file removed')
+
+        # --- two runs over the same book must not eat its original ----------------------
+        # calibre's save_original_format overwrites. Queue the same book twice before either
+        # finishes - a double-clicked button, or a manual run racing the import listener - and
+        # both jobs carry changed=True from the same pristine copy. The second commit would
+        # then save the first one's output over the real original, leaving Restore original
+        # restoring an already-processed book.
+        import hashlib
+
+        def sha(bid, fmt):
+            p = db.format_abspath(bid, fmt)
+            if not p:
+                return None
+            with open(p, 'rb') as f:
+                return hashlib.sha256(f.read()).hexdigest()
+
+        twice = db.add_books(
+            [(Metadata('Double Run', ['Test Author']),
+              {'EPUB': make_broken_epub(os.path.join(tmp, 'twice.epub'))})],
+            add_duplicates=True)[0][0]
+        pristine = sha(twice, 'EPUB')
+        a_specs, _ = act._epub_jobs([twice])
+        b_specs, _ = act._epub_jobs([twice])          # both copied out before either commits
+        act._commit_results([jobs.run_single(a_specs[0])])
+        first_backup = sha(twice, 'ORIGINAL_EPUB')
+        check('twice', first_backup == pristine,
+              'the first run backs up the pristine book')
+        act._commit_results([jobs.run_single(b_specs[0])])
+        check('twice', sha(twice, 'ORIGINAL_EPUB') == pristine,
+              'and a second overlapping run leaves that backup alone')
     finally:
         for k, v in saved.items():
             if v is not None:

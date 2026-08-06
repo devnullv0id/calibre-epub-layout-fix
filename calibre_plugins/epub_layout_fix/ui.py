@@ -336,11 +336,17 @@ class _BaseGui(InterfaceAction):
                 if r.get('dry_run'):
                     # the work was done and verified; it just does not get to stay
                     continue
-                try:
-                    # same call calibre's own Polish action makes, so its Restore original works
-                    db.save_original_format(book_id, 'EPUB')
-                except Exception:                              # noqa: BLE001 - no ORIGINAL yet
-                    pass
+                # The same call calibre's own Polish action makes, so its Restore original works -
+                # but only when nothing is saved yet. calibre overwrites, and two runs queued over
+                # the same book (a double-clicked button, or a manual run racing the import
+                # listener) both carry changed=True from the same pristine copy: the first saves
+                # the original, the second would save the first one's output over it and leave
+                # Restore original restoring an already-processed book.
+                if 'ORIGINAL_EPUB' not in {f.upper() for f in (db.formats(book_id) or ())}:
+                    try:
+                        db.save_original_format(book_id, 'EPUB')
+                    except Exception:                          # noqa: BLE001 - no EPUB yet
+                        pass
                 try:
                     with open(r['path'], 'rb') as f:
                         db.add_format(book_id, 'EPUB', f, run_hooks=False)
