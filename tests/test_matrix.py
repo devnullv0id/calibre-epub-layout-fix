@@ -211,11 +211,16 @@ def run_matrix(book, workdir):
                   '%s/%s: the cover is left alone (%s)' % (name, label, sorted(added_cover)[:3]))
             check('setting', not res.cover_fixed, '%s/%s: cover_fixed stays false' % (name, label))
         if overrides.get('dark_cover') is False and cover:
-            marked = [t for t in txt.values() if fixer.COVER_MARKER in t]
-            if marked:
-                check('setting', 'background-color' not in marked[0],
-                      '%s/%s: no letterbox colour painted' % (name, label))
-                check('setting', 'width: auto !important' in marked[0],
+            # Only the plugin's own delimited block is its business. Searching the whole page
+            # reported a book carrying "svg { background-color: #000000 }" from the PowerShell
+            # script this was ported from as a settings failure, when the block this run wrote
+            # was correctly colourless.
+            blocks = [m.group(0) for t in txt.values()
+                      for m in [fixer._COVER_BLOCK_RE.search(t)] if m]
+            if blocks:
+                check('setting', 'background-color' not in blocks[0],
+                      '%s/%s: no letterbox colour in the block this run wrote' % (name, label))
+                check('setting', 'width: auto !important' in blocks[0],
                       '%s/%s: the sizing overrides are still applied' % (name, label))
         if overrides.get('cover_color'):
             marked = [t for t in txt.values() if fixer.COVER_MARKER in t]
