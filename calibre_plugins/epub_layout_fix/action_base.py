@@ -11,7 +11,7 @@ from calibre.customize import InterfaceActionBase
 
 __license__ = 'GPL v3'
 
-PLUGIN_VERSION = (0, 2, 1)
+PLUGIN_VERSION = (0, 2, 0)
 PLUGIN_AUTHOR = 'devnullv0id'
 MIN_CALIBRE = (5, 0, 0)
 
