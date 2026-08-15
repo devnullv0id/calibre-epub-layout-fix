@@ -10,6 +10,8 @@ is the one form that does not have to resolve on both forges.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -61,6 +63,8 @@ def main():
     call('PUT', '%s?itemPath=%s' % (container['fileContainerResourceUrl'], item), payload, {
         'Content-Type': 'application/octet-stream',
         'Content-Range': 'bytes 0-%d/%d' % (len(payload) - 1, len(payload)),
+        'x-tfs-filelength': str(len(payload)),
+        'x-actions-results-md5': base64.b64encode(hashlib.md5(payload).digest()).decode('ascii'),
     })
 
     call('PATCH', '%s&artifactName=%s' % (workflow, urllib.parse.quote(name)),
