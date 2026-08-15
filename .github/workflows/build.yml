@@ -16,12 +16,12 @@ jobs:
     permissions:
       contents: write        # needed only by the release step on a v* tag
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # the release notes are built from the log between the last tag and this commit
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -44,9 +44,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: python build.py --check-version "${GITHUB_REF#refs/tags/}"
 
-      # The one place the two forges cannot share a line. v4 refuses to run anywhere it does not
-      # recognise as github.com, and setting GITHUB_SERVER_URL on the step does not fool it -
-      # the runner reapplies its own.
+      # The one place the two forges cannot share a line. Every upload-artifact since v4 refuses
+      # to run anywhere it does not recognise as github.com, and setting GITHUB_SERVER_URL on the
+      # step does not fool it - the runner reapplies its own.
       #
       # Nor can Forgejo simply name a different action. GitHub resolves every action in a job
       # before it evaluates any if:, and fails the job there: not found for Forgejo's own fork
@@ -54,7 +54,7 @@ jobs:
       # to resolve, and the API it posts to is the one v3 used successfully here.
       - name: Keep the zip on the run
         if: github.server_url == 'https://github.com'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: EPUB-Layout-Fix
           path: dist/EPUB-Layout-Fix.zip
