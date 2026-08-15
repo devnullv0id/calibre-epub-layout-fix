@@ -30,6 +30,12 @@ Every push also uploads the zip as a run artifact, released or not, so the newes
 downloadable from the Actions tab. `build.py --check-version` still guards a tag pushed by hand
 against a mismatched `PLUGIN_VERSION`.
 
+That upload is the one step the two forges do differently. `upload-artifact@v4` refuses to run
+anywhere it does not recognise as github.com, and naming a different action for Forgejo takes
+GitHub down instead — it resolves every action in a job before it evaluates any `if:`, and fails
+on one it cannot find, or on the deprecated v3. So GitHub keeps the action and Forgejo runs
+`scripts/upload_artifact.py`, which posts the zip to the same artifact API the action would.
+
 ## Tests
 
 ```
