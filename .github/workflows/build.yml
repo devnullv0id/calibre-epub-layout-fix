@@ -46,12 +46,12 @@ jobs:
 
       # The one place the two forges cannot share a line. v4 refuses to run anywhere it does not
       # recognise as github.com, and setting GITHUB_SERVER_URL on the step does not fool it -
-      # the runner reapplies its own. An action reference cannot be an expression either, so
-      # each forge gets the newest version it will actually run.
+      # the runner reapplies its own.
       #
-      # Both references have to exist on both forges even so: GitHub resolves every action in a
-      # job before it evaluates any if:, and fails the job outright on one it cannot find. That
-      # rules out Forgejo's own fork of v4, which exists only on Forgejo.
+      # Nor can Forgejo simply name a different action. GitHub resolves every action in a job
+      # before it evaluates any if:, and fails the job there: not found for Forgejo's own fork
+      # of v4, deprecated for v3. Both were tried. A run step is the only form GitHub never has
+      # to resolve, and the API it posts to is the one v3 used successfully here.
       - name: Keep the zip on the run
         if: github.server_url == 'https://github.com'
         uses: actions/upload-artifact@v4
@@ -62,11 +62,7 @@ jobs:
 
       - name: Keep the zip on the run
         if: github.server_url != 'https://github.com'
-        uses: actions/upload-artifact@v3
-        with:
-          name: EPUB-Layout-Fix
-          path: dist/EPUB-Layout-Fix.zip
-          if-no-files-found: error
+        run: python scripts/upload_artifact.py EPUB-Layout-Fix dist/EPUB-Layout-Fix.zip
 
       # Releasing is driven by PLUGIN_VERSION, not by remembering to push a tag. Bump the version
       # in action_base.py, push to main, and the version that has no tag yet gets one. A version
