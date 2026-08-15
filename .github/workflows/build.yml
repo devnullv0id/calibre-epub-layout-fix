@@ -44,10 +44,14 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: python build.py --check-version "${GITHUB_REF#refs/tags/}"
 
-      # The one place the two forges cannot share a line. upload-artifact@v4 refuses to run
-      # anywhere it does not recognise as github.com, so Forgejo needs its fork of the same
-      # action, which exists only on Forgejo - and an action reference cannot be an expression.
-      # Setting GITHUB_SERVER_URL on the step does not help: the runner reapplies its own.
+      # The one place the two forges cannot share a line. v4 refuses to run anywhere it does not
+      # recognise as github.com, and setting GITHUB_SERVER_URL on the step does not fool it -
+      # the runner reapplies its own. An action reference cannot be an expression either, so
+      # each forge gets the newest version it will actually run.
+      #
+      # Both references have to exist on both forges even so: GitHub resolves every action in a
+      # job before it evaluates any if:, and fails the job outright on one it cannot find. That
+      # rules out Forgejo's own fork of v4, which exists only on Forgejo.
       - name: Keep the zip on the run
         if: github.server_url == 'https://github.com'
         uses: actions/upload-artifact@v4
@@ -58,7 +62,7 @@ jobs:
 
       - name: Keep the zip on the run
         if: github.server_url != 'https://github.com'
-        uses: forgejo/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: EPUB-Layout-Fix
           path: dist/EPUB-Layout-Fix.zip
