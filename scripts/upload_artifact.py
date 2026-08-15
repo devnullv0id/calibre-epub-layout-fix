@@ -2,10 +2,6 @@
 """Attach a file to the running job as an artifact, without an action.
 
     python scripts/upload_artifact.py EPUB-Layout-Fix dist/EPUB-Layout-Fix.zip
-
-upload-artifact@v4 refuses to run anywhere it does not recognise as github.com, its fork lives
-only on Forgejo, and v3 is deprecated - GitHub fails a job for merely naming either. A run step
-is the one form that does not have to resolve on both forges.
 """
 
 from __future__ import annotations

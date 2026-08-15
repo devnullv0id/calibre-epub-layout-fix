@@ -2,9 +2,6 @@
 """Publish TAG as a release with the plugin zip attached, on whichever forge this runs on.
 
     python scripts/publish_release.py dist/EPUB-Layout-Fix.zip
-
-Reads GITHUB_API_URL, so the same call targets GitHub or Forgejo. Doing nothing when the
-release already exists is deliberate: re-running must be harmless.
 """
 
 from __future__ import annotations
