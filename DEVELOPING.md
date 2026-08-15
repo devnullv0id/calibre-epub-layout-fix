@@ -18,8 +18,13 @@ and push to main. That is the whole release process: CI reads the version, and i
 it yet, creates the tag at that commit and publishes a release with the zip attached. Pushing
 again without a bump publishes nothing, so ordinary commits are safe.
 
-There is no `latest` tag to maintain. GitHub resolves `/releases/latest` to the newest
-non-prerelease release on its own, which is the link the README points at.
+The repo lives on GitHub and on Forgejo, and `origin` pushes to both, so one push runs both CIs
+and each publishes the release its own forge is missing. `scripts/publish_release.py` is what
+does it: it reads `GITHUB_API_URL`, so the same step works on either. Nothing coordinates the
+two — a forge that was unreachable catches up on the next push.
+
+There is no `latest` tag to maintain. Both forges resolve `/releases/latest` to the newest
+non-prerelease release on their own, which is the link the README points at.
 
 Every push also uploads the zip as a run artifact, released or not, so the newest build is always
 downloadable from the Actions tab. `build.py --check-version` still guards a tag pushed by hand

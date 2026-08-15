@@ -17,6 +17,9 @@ jobs:
       contents: write        # needed only by the release step on a v* tag
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the release notes are built from the log between the last tag and this commit
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -51,9 +54,12 @@ jobs:
       # in action_base.py, push to main, and the version that has no tag yet gets one. A version
       # already released is left alone, so ordinary pushes publish nothing.
       #
-      # There is no separate "latest" tag to maintain: GitHub resolves /releases/latest to the
-      # newest non-prerelease release by itself, which is the link the README uses. Moving a tag
-      # by hand would only break clones that had already fetched it.
+      # There is no separate "latest" tag to maintain: both forges resolve /releases/latest to
+      # the newest non-prerelease release by themselves, which is the link the README uses.
+      # Moving a tag by hand would only break clones that had already fetched it.
+      #
+      # ls-remote asks the forge this run is on, so each publishes its own missing release and
+      # neither waits on the other.
       - name: Does this version still need releasing?
         id: version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -68,24 +74,17 @@ jobs:
             echo "release=yes" >> "$GITHUB_OUTPUT"
           fi
 
-      # The tag is created here, at this commit. Tags pushed by GITHUB_TOKEN do not start another
-      # workflow run, so this cannot loop back into itself.
-      - name: Release the new version
-        if: steps.version.outputs.release == 'yes'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: ${{ steps.version.outputs.version }}
-          # the commit this zip was built from, not whatever main's head happens to be by now
-          target_commitish: ${{ github.sha }}
-          files: dist/EPUB-Layout-Fix.zip
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-
-      # Still honoured, for a tag pushed by hand.
-      - name: Attach the zip to a hand-pushed tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/EPUB-Layout-Fix.zip
-          fail_on_unmatched_files: true
+      # The tag is created here, at this commit - target_commitish is github.sha, not whatever
+      # main's head happens to be by now. The same step also covers a tag pushed by hand, where
+      # the release exists to be attached to rather than created.
+      #
+      # This is a script rather than an action because the job has to do the same thing on two
+      # forges: softprops/action-gh-release is not mirrored on data.forgejo.org and speaks the
+      # GitHub API. publish_release.py reads GITHUB_API_URL and so targets whichever forge it
+      # runs on, and does nothing when the release already exists, so a rerun is harmless.
+      - name: Publish the release
+        if: steps.version.outputs.release == 'yes' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TOKEN: ${{ secrets.FORGE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version || github.ref_name }}
+        run: python scripts/publish_release.py dist/EPUB-Layout-Fix.zip

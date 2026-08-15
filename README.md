@@ -7,9 +7,10 @@ Select books, click a button, and the work runs in the background as a normal ca
 
 ## Install
 
-Download **`EPUB-Layout-Fix.zip`** from the
-[latest release](https://github.com/devnullv0id/calibre-epub-layout-fix/releases/latest). Then in
-calibre:
+Download **`EPUB-Layout-Fix.zip`** from the latest release, on
+[GitHub](https://github.com/devnullv0id/calibre-epub-layout-fix/releases/latest) or
+[Forgejo](https://code.private-home-network.de/devnullv0id/calibre-epub-layout-fix/releases/latest).
+The two forges carry the same zip. Then in calibre:
 
 1. **Preferences → Plugins → Load plugin from file**
 2. Pick the zip. calibre will warn that plugins are code from an untrusted source; accept it.
@@ -27,9 +28,10 @@ Upgrading is the same steps; calibre replaces the old version. To remove it,
 **Preferences → Plugins → EPUB Layout Fix → Remove plugin**.
 
 Every push also builds the zip, so the newest code is the `EPUB-Layout-Fix` artifact on the most
-recent green run under
-[Actions](https://github.com/devnullv0id/calibre-epub-layout-fix/actions), which can be ahead of
-the last release.
+recent green run — under Actions on
+[GitHub](https://github.com/devnullv0id/calibre-epub-layout-fix/actions) or
+[Forgejo](https://code.private-home-network.de/devnullv0id/calibre-epub-layout-fix/actions) — which
+can be ahead of the last release.
 
 **Requirements:** calibre 5.0 or newer (developed against 9.12.0), plus the
 [KFX Input](https://www.mobileread.com/forums/showthread.php?t=291290) plugin if you want to
